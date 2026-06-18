@@ -438,6 +438,14 @@ function getSimpleToneAndStyleSection(): string {
   return [`# Tone and style`, ...prependBullets(items)].join(`\n`)
 }
 
+/**
+ * 构建主模型使用的 system prompt 字符串数组。
+ *
+ * 调用顺序：
+ * 1. 收集工具、MCP、输出风格、环境信息等会影响行为的提示词片段。
+ * 2. 通过 systemPromptSection / resolveSystemPromptSections 复用稳定片段缓存。
+ * 3. 在支持全局缓存时插入 SYSTEM_PROMPT_DYNAMIC_BOUNDARY，供 API 层拆分缓存块。
+ */
 export async function getSystemPrompt(
   tools: Tools,
   model: string,

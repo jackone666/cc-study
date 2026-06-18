@@ -65,6 +65,12 @@ export async function findRelevantMemories(
   return selected.map(m => ({ path: m.filePath, mtimeMs: m.mtimeMs }))
 }
 
+/**
+ * 让小模型从记忆 manifest 中选择最相关的文件名。
+ *
+ * 这里只返回文件名，不直接返回内容；调用方随后再用文件名回到扫描结果中取路径和 mtime，
+ * 这样可以保证模型输出必须命中已扫描到的合法文件。
+ */
 async function selectRelevantMemories(
   query: string,
   memories: MemoryHeader[],

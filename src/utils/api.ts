@@ -65,7 +65,7 @@ import { getToolSchemaCache } from './toolSchemaCache.js'
 import { windowsPathToPosixPath } from './windowsPaths.js'
 import { zodToJsonSchema } from './zodToJsonSchema.js'
 
-// Extended BetaTool type with strict mode and defer_loading support
+// 扩展 SDK 的 BetaTool 类型，补上当前 API beta 字段。
 type BetaToolWithExtras = BetaTool & {
   strict?: boolean
   defer_loading?: boolean
@@ -83,15 +83,14 @@ export type SystemPromptBlock = {
   cacheScope: CacheScope | null
 }
 
-// Fields to filter from tool schemas when swarms are not enabled
+// 关闭 swarms 时，需要从工具 schema 中隐藏的字段。
 const SWARM_FIELDS_BY_TOOL: Record<string, string[]> = {
   [EXIT_PLAN_MODE_V2_TOOL_NAME]: ['launchSwarm', 'teammateCount'],
   [AGENT_TOOL_NAME]: ['name', 'team_name', 'mode'],
 }
 
 /**
- * Filter swarm-related fields from a tool's input schema.
- * Called at runtime when isAgentSwarmsEnabled() returns false.
+ * 从工具输入 schema 中过滤 swarms 相关字段。
  */
 function filterSwarmFieldsFromSchema(
   toolName: string,
@@ -102,7 +101,7 @@ function filterSwarmFieldsFromSchema(
     return schema
   }
 
-  // Clone the schema to avoid mutating the original
+  // 克隆 schema，避免修改工具对象持有的原始 schema。
   const filtered = { ...schema }
   const props = filtered.properties
   if (props && typeof props === 'object') {
@@ -116,6 +115,15 @@ function filterSwarmFieldsFromSchema(
   return filtered
 }
 
+/**
+ * 把内部 Tool 定义转换成 Anthropic API 的 tool schema。
+ *
+ * 调用顺序：
+ * 1. 取工具名、描述和输入 schema。
+ * 2. 按功能开关裁剪外部用户不应看到的字段。
+ * 3. 根据模型能力和远程开关追加 strict、细粒度流式输入、缓存控制等 API 字段。
+ * 4. 返回值进入 Messages API 的 `tools` 数组。
+ */
 export async function toolToAPISchema(
   tool: Tool,
   options: {
@@ -124,7 +132,7 @@ export async function toolToAPISchema(
     agents: AgentDefinition[]
     allowedAgentTypes?: string[]
     model?: string
-    /** When true, mark this tool with defer_loading for tool search */
+    /** 为 true 时，给工具搜索场景标记 defer_loading。 */
     deferLoading?: boolean
     cacheControl?: {
       type: 'ephemeral'
@@ -133,17 +141,8 @@ export async function toolToAPISchema(
     }
   },
 ): Promise<BetaToolUnion> {
-  // Session-stable base schema: name, description, input_schema, strict,
-  // eager_input_streaming. These are computed once per session and cached to
-  // prevent mid-session GrowthBook flips (tengu_tool_pear, tengu_fgts) or
-  // tool.prompt() drift from churning the serialized tool array bytes.
-  // See toolSchemaCache.ts for rationale.
-  //
-  // Cache key includes inputJSONSchema when present. StructuredOutput instances
-  // share the name 'StructuredOutput' but carry different schemas per workflow
-  // call — name-only keying returned a stale schema (5.4% → 51% err rate, see
-  // PR#25424). MCP tools also set inputJSONSchema but each has a stable schema,
-  // so including it preserves their GB-flip cache stability.
+  // 基础 schema 在会话内保持稳定，避免远程开关或 tool.prompt() 变化导致工具数组字节频繁变化。
+  // 如果工具自带 inputJSONSchema，就把它放进缓存 key，避免同名 StructuredOutput 复用到旧 schema。
   const cacheKey =
     'inputJSONSchema' in tool && tool.inputJSONSchema
       ? `${tool.name}:${jsonStringify(tool.inputJSONSchema)}`
@@ -153,15 +152,14 @@ export async function toolToAPISchema(
   if (!base) {
     const strictToolsEnabled =
       checkStatsigFeatureGate_CACHED_MAY_BE_STALE('tengu_tool_pear')
-    // Use tool's JSON schema directly if provided, otherwise convert Zod schema
+    // 优先使用工具自带 JSON Schema，否则从 Zod schema 转换。
     let input_schema = (
       'inputJSONSchema' in tool && tool.inputJSONSchema
         ? tool.inputJSONSchema
         : zodToJsonSchema(tool.inputSchema)
     ) as Anthropic.Tool.InputSchema
 
-    // Filter out swarm-related fields when swarms are not enabled
-    // This ensures external non-EAP users don't see swarm features in the schema
+    // swarms 关闭时隐藏相关字段，避免外部用户在 schema 中看到不可用能力。
     if (!isAgentSwarmsEnabled()) {
       input_schema = filterSwarmFieldsFromSchema(tool.name, input_schema)
     }
@@ -177,11 +175,7 @@ export async function toolToAPISchema(
       input_schema,
     }
 
-    // Only add strict if:
-    // 1. Feature flag is enabled
-    // 2. Tool has strict: true
-    // 3. Model is provided and supports it (not all models support it right now)
-    //    (if model is not provided, assume we can't use strict tools)
+    // strict 只有在功能开关、工具声明和模型能力都满足时才下发。
     if (
       strictToolsEnabled &&
       tool.strict === true &&
@@ -191,11 +185,8 @@ export async function toolToAPISchema(
       base.strict = true
     }
 
-    // Enable fine-grained tool streaming via per-tool API field.
-    // Without FGTS, the API buffers entire tool input parameters before sending
-    // input_json_delta events, causing multi-minute hangs on large tool inputs.
-    // Gated to direct api.anthropic.com: proxies (LiteLLM etc.) and Bedrock/Vertex
-    // with Claude 4.5 reject this field with 400. See GH#32742, PR #21729.
+    // 细粒度工具输入流式可以避免大工具参数在 API 侧完整缓冲后才返回增量。
+    // 该字段只发给一方 API，避免代理网关或其他 provider 因未知字段报 400。
     if (
       getAPIProvider() === 'firstParty' &&
       isFirstPartyAnthropicBaseUrl() &&
@@ -208,10 +199,7 @@ export async function toolToAPISchema(
     cache.set(cacheKey, base)
   }
 
-  // Per-request overlay: defer_loading and cache_control vary by call
-  // (tool search defers different tools per turn; cache markers move).
-  // Explicit field copy avoids mutating the cached base and sidesteps
-  // BetaTool.cache_control's `| null` clashing with our narrower type.
+  // 每次请求可变字段单独覆盖，避免修改上面缓存的基础 schema。
   const schema: BetaToolWithExtras = {
     name: base.name,
     description: base.description,
@@ -220,7 +208,7 @@ export async function toolToAPISchema(
     ...(base.eager_input_streaming && { eager_input_streaming: true }),
   }
 
-  // Add defer_loading if requested (for tool search feature)
+  // 工具搜索场景可延迟加载部分工具 schema。
   if (options.deferLoading) {
     schema.defer_loading = true
   }
@@ -229,17 +217,8 @@ export async function toolToAPISchema(
     schema.cache_control = options.cacheControl
   }
 
-  // CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS is the kill switch for beta API
-  // shapes. Proxy gateways (ANTHROPIC_BASE_URL → LiteLLM → Bedrock) reject
-  // fields like defer_loading with "Extra inputs are not permitted". The gates
-  // above each field are scattered and not all provider-aware, so this strips
-  // everything not in the base-tool allowlist at the one choke point all tool
-  // schemas pass through — including fields added in the future.
-  // cache_control is allowlisted: the base {type: 'ephemeral'} shape is
-  // standard prompt caching (Bedrock/Vertex supported); the beta sub-fields
-  // (scope, ttl) are already gated upstream by shouldIncludeFirstPartyOnlyBetas
-  // which independently respects this kill switch.
-  // github.com/anthropics/claude-code/issues/20031
+  // beta API 字段总开关：关闭后只保留基础字段，避免代理网关拒绝未知 beta 字段。
+  // cache_control 保留，因为基础 ephemeral 缓存形态是标准提示词缓存的一部分。
   if (isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS)) {
     const allowed = new Set([
       'name',
@@ -259,9 +238,7 @@ export async function toolToAPISchema(
     }
   }
 
-  // Note: We cast to BetaTool but the extra fields are still present at runtime
-  // and will be serialized in the API request, even though they're not in the SDK's
-  // BetaTool type definition. This is intentional for beta features.
+  // 类型转回 BetaTool，但运行时仍保留 beta 扩展字段并序列化进 API 请求。
   return schema as BetaTool
 }
 
@@ -417,6 +394,12 @@ export function splitSysPromptPrefix(
   return result
 }
 
+/**
+ * 把系统侧动态上下文追加到 system prompt 尾部。
+ *
+ * 这里不把动态内容插入 system prompt 前缀，是为了尽量保持前缀稳定，
+ * 让 `splitSysPromptPrefix` 后续能更好地命中 prompt cache。
+ */
 export function appendSystemContext(
   systemPrompt: SystemPrompt,
   context: { [k: string]: string },
@@ -430,6 +413,12 @@ export function appendSystemContext(
   ].filter(Boolean)
 }
 
+/**
+ * 把用户侧动态上下文包装成 meta user message 并放到消息数组最前面。
+ *
+ * CLAUDE.md、MEMORY.md、当前日期等内容通过这个函数进入模型视野。
+ * 它们不是 system prompt，所以不会破坏系统提示词的缓存边界。
+ */
 export function prependUserContext(
   messages: Message[],
   context: { [k: string]: string },

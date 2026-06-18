@@ -25,11 +25,15 @@ import {
 import { runPostCompactCleanup } from './postCompactCleanup.js'
 import { trySessionMemoryCompaction } from './sessionMemoryCompact.js'
 
-// Reserve this many tokens for output during compaction
-// Based on p99.99 of compact summary output being 17,387 tokens.
+// 压缩摘要需要预留输出空间；当前值覆盖历史 p99.99 的摘要输出规模。
 const MAX_OUTPUT_TOKENS_FOR_SUMMARY = 20_000
 
-// Returns the context window size minus the max output tokens for the model
+/**
+ * 返回模型可用于输入上下文的有效窗口。
+ *
+ * 总窗口需要扣掉压缩摘要本身的输出预算，否则压缩请求可能输入刚好没超，
+ * 但模型生成摘要时仍然因为输出空间不足而失败。
+ */
 export function getEffectiveContextWindowSize(model: string): number {
   const reservedTokensForSummary = Math.min(
     getMaxOutputTokensForModel(model),
@@ -51,11 +55,9 @@ export function getEffectiveContextWindowSize(model: string): number {
 export type AutoCompactTrackingState = {
   compacted: boolean
   turnCounter: number
-  // Unique ID per turn
+  // 每次成功压缩后生成一个新的轮次 ID，便于分析链内重复压缩。
   turnId: string
-  // Consecutive autocompact failures. Reset on success.
-  // Used as a circuit breaker to stop retrying when the context is
-  // irrecoverably over the limit (e.g., prompt_too_long).
+  // 连续自动压缩失败次数；成功后清零，用于熔断明显无法恢复的超窗会话。
   consecutiveFailures?: number
 }
 
@@ -64,9 +66,7 @@ export const WARNING_THRESHOLD_BUFFER_TOKENS = 20_000
 export const ERROR_THRESHOLD_BUFFER_TOKENS = 20_000
 export const MANUAL_COMPACT_BUFFER_TOKENS = 3_000
 
-// Stop trying autocompact after this many consecutive failures.
-// BQ 2026-03-10: 1,279 sessions had 50+ consecutive failures (up to 3,272)
-// in a single session, wasting ~250K API calls/day globally.
+// 连续失败达到阈值后停止自动压缩，避免同一会话反复发起注定失败的压缩请求。
 const MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES = 3
 
 export function getAutoCompactThreshold(model: string): number {
@@ -75,7 +75,7 @@ export function getAutoCompactThreshold(model: string): number {
   const autocompactThreshold =
     effectiveContextWindow - AUTOCOMPACT_BUFFER_TOKENS
 
-  // Override for easier testing of autocompact
+  // 测试和调试时可用环境变量临时降低自动压缩阈值。
   const envPercent = process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
   if (envPercent) {
     const parsed = parseFloat(envPercent)
@@ -90,6 +90,11 @@ export function getAutoCompactThreshold(model: string): number {
   return autocompactThreshold
 }
 
+/**
+ * 根据当前 token 使用量计算上下文窗口状态。
+ *
+ * 调用方用这些布尔值决定 UI 警告、自动压缩、硬阻塞等行为。
+ */
 export function calculateTokenWarningState(
   tokenUsage: number,
   model: string,
@@ -123,7 +128,7 @@ export function calculateTokenWarningState(
   const defaultBlockingLimit =
     actualContextWindow - MANUAL_COMPACT_BUFFER_TOKENS
 
-  // Allow override for testing
+  // 测试和调试时可覆盖硬阻塞阈值。
   const blockingLimitOverride = process.env.CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE
   const parsedOverride = blockingLimitOverride
     ? parseInt(blockingLimitOverride, 10)

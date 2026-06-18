@@ -2338,25 +2338,25 @@ export function memoryHeader(path: string, mtimeMs: number): string {
  * consume-if-ready or skip-and-retry-next-iteration — the prefetch never
  * blocks the turn.
  *
- * Disposable: query.ts binds with `using`, so [Symbol.dispose] fires on all
- * generator exit paths (return, throw, .return() closure) — aborting the
- * in-flight request and emitting terminal telemetry without instrumenting
- * each of the ~13 return sites inside the while loop.
+ * query.ts 通过 `using` 绑定这个句柄，所以无论主循环正常返回、抛错还是被 .return()
+ * 关闭，都会触发 [Symbol.dispose]：取消仍在进行的记忆检索，并统一记录遥测。
  */
 export type MemoryPrefetch = {
   promise: Promise<Attachment[]>
-  /** Set by promise.finally(). null until the promise settles. */
+  /** promise.finally() 写入；promise 完成前保持 null。 */
   settledAt: number | null
-  /** Set by the collect point in query.ts. -1 until consumed. */
+  /** query.ts 消费预取结果时写入；未消费前为 -1。 */
   consumedOnIteration: number
   [Symbol.dispose](): void
 }
 
 /**
- * Starts the relevant memory search as an async prefetch.
- * Extracts the last real user prompt from messages (skipping isMeta system
- * injections) and kicks off a non-blocking search. Returns a Disposable
- * handle with settlement tracking. Bound with `using` in query.ts.
+ * 启动相关记忆的异步预取。
+ *
+ * 调用顺序：
+ * 1. 从 messages 中找到最近一条真实用户输入，跳过 isMeta 的系统注入。
+ * 2. 根据当前 query、最近成功工具、已展示记忆路径发起非阻塞记忆检索。
+ * 3. 返回可 dispose 的句柄，query.ts 后续在工具回合结束后零等待消费。
  */
 export function startRelevantMemoryPrefetch(
   messages: ReadonlyArray<Message>,
@@ -2375,7 +2375,7 @@ export function startRelevantMemoryPrefetch(
   }
 
   const input = getUserMessageText(lastUserMessage)
-  // Single-word prompts lack enough context for meaningful term extraction
+  // 单词级 prompt 信息量太低，跳过记忆召回，避免无意义匹配。
   if (!input || !/\s/.test(input.trim())) {
     return undefined
   }
@@ -2385,8 +2385,7 @@ export function startRelevantMemoryPrefetch(
     return undefined
   }
 
-  // Chained to the turn-level abort so user Escape cancels the sideQuery
-  // immediately, not just on [Symbol.dispose] when queryLoop exits.
+  // 绑定到本轮 abort：用户按 Esc 时立即取消 sideQuery，而不是等 queryLoop 退出。
   const controller = createChildAbortController(toolUseContext.abortController)
   const firedAt = Date.now()
   const promise = getRelevantMemoryAttachments(
@@ -2439,28 +2438,19 @@ function isToolResultBlock(b: unknown): b is ToolResultBlock {
 }
 
 /**
- * Check whether a user message's content contains tool_result blocks.
- * This is more reliable than checking `toolUseResult === undefined` because
- * sub-agent tool result messages explicitly set `toolUseResult` to `undefined`
- * when `preserveToolUseResults` is false (the default for Explore agents).
+ * 判断 user message 内容中是否包含 tool_result block。
+ *
+ * 不能只看 toolUseResult 字段，因为某些子代理会显式把 toolUseResult 设为 undefined。
  */
 function hasToolResultContent(content: unknown): boolean {
   return Array.isArray(content) && content.some(isToolResultBlock)
 }
 
 /**
- * Tools that succeeded (and never errored) since the previous real turn
- * boundary.  The memory selector uses this to suppress docs about tools
- * that are working — surfacing reference material for a tool the model
- * is already calling successfully is noise.
+ * 收集上一条真实用户消息之后成功执行过、且没有失败记录的工具名。
  *
- * Any error → tool excluded (model is struggling, docs stay available).
- * No result yet → also excluded (outcome unknown).
- *
- * tool_use lives in assistant content; tool_result in user content
- * (toolUseResult set, isMeta undefined).  Both are within the scan window.
- * Backward scan sees results before uses so we collect both by id and
- * resolve after.
+ * 记忆选择器会用这些工具名抑制普通用法文档召回：模型已经能成功调用的工具，
+ * 再给参考文档通常是噪声；如果工具失败过，则保留相关记忆召回机会。
  */
 export function collectRecentSuccessfulTools(
   messages: ReadonlyArray<Message>,
@@ -2504,18 +2494,10 @@ export function collectRecentSuccessfulTools(
 
 
 /**
- * Filters prefetched memory attachments to exclude memories the model already
- * has in context via FileRead/Write/Edit tool calls (any iteration this turn)
- * or a previous turn's memory surfacing — both tracked in the cumulative
- * readFileState. Survivors are then marked in readFileState so subsequent
- * turns won't re-surface them.
+ * 过滤预取到的记忆附件，排除模型已经通过 Read/Write/Edit 或上一轮记忆召回看过的路径。
  *
- * The mark-after-filter ordering is load-bearing: readMemoriesForSurfacing
- * used to write to readFileState during the prefetch, which meant the filter
- * saw every prefetch-selected path as "already in context" and dropped them
- * all (self-referential filter). Deferring the write to here, after the
- * filter runs, breaks that cycle while still deduping against tool calls
- * from any iteration.
+ * 注意顺序：必须先过滤，再把幸存记忆写入 readFileState。
+ * 如果预取阶段就写入 readFileState，这里会误判“全部已经在上下文里”，导致自我过滤。
  */
 export function filterDuplicateMemoryAttachments(
   attachments: Attachment[],
@@ -2934,6 +2916,12 @@ async function getLSPDiagnosticAttachments(
   }
 }
 
+/**
+ * 生成本轮要追加给模型的附件消息。
+ *
+ * 调用顺序上，它位于工具执行之后、进入下一次模型请求之前；
+ * 因此文件变化、IDE 选区、任务通知、hook 输出等都能随 tool_result 一起进入下一轮上下文。
+ */
 export async function* getAttachmentMessages(
   input: string | null,
   toolUseContext: ToolUseContext,
@@ -2943,7 +2931,7 @@ export async function* getAttachmentMessages(
   querySource?: QuerySource,
   options?: { skipSkillDiscovery?: boolean },
 ): AsyncGenerator<AttachmentMessage, void> {
-  // TODO: Compute this upstream
+  // 附件聚合仍在这里统一计算，后续可上移到调用方减少重复工作。
   const attachments = await getAttachments(
     input,
     toolUseContext,

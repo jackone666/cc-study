@@ -29,7 +29,7 @@ Claude Code 的上下文工程可以理解成一个“请求装配器”。用�
 
 ### 2. 一轮请求如何组装
 
-每轮请求从 [`queryLoop()`](../src/query.ts#L217) 开始。它不会直接把完整历史丢给模型，而是先做一次“上下文整理”：
+每轮请求从 [`queryLoop()`](../src/query.ts#L227) 开始。它不会直接把完整历史丢给模型，而是先做一次“上下文整理”：
 
 1. 从当前 `state.messages` 取出压缩边界之后的有效历史。
 2. 对过大的工具结果做预算控制，必要时替换成较短引用。
@@ -43,13 +43,13 @@ Claude Code 的上下文工程可以理解成一个“请求装配器”。用�
 
 ### 3. system prompt 和 user context 的区别
 
-system prompt 是模型行为的最高层规则，例如怎么工作、如何使用工具、哪些安全边界要遵守。它通过 [`src/constants/prompts.ts`](../src/constants/prompts.ts) 组织，最终由 [`buildSystemPromptBlocks()`](../src/services/api/claude.ts#L3213) 转成 API 的 system text blocks。
+system prompt 是模型行为的最高层规则，例如怎么工作、如何使用工具、哪些安全边界要遵守。它通过 [`src/constants/prompts.ts`](../src/constants/prompts.ts) 组织，最终由 [`buildSystemPromptBlocks()`](../src/services/api/claude.ts#L3228) 转成 API 的 system text blocks。
 
-user context 虽然对模型也很重要，但它不是 system prompt。比如 CLAUDE.md、MEMORY.md、当前日期会通过 [`prependUserContext()`](../src/utils/api.ts#L433) 包成 `<system-reminder>`，作为 meta user message 放在消息数组前面。这样做的好处是：项目规则和记忆能被模型看到，但不会污染系统提示词缓存边界。
+user context 虽然对模型也很重要，但它不是 system prompt。比如 CLAUDE.md、MEMORY.md、当前日期会通过 [`prependUserContext()`](../src/utils/api.ts#L422) 包成 `<system-reminder>`，作为 meta user message 放在消息数组前面。这样做的好处是：项目规则和记忆能被模型看到，但不会污染系统提示词缓存边界。
 
 ### 4. prompt cache 的核心思路
 
-缓存的关键是“稳定前缀”。[`SYSTEM_PROMPT_DYNAMIC_BOUNDARY`](../src/constants/prompts.ts#L111) 把系统提示词切成静态段和动态段。[`splitSysPromptPrefix()`](../src/utils/api.ts#L304) 根据这个边界决定哪些 block 可以使用 `global` 或 `org` 级缓存，哪些 block 不能缓存。
+缓存的关键是“稳定前缀”。[`SYSTEM_PROMPT_DYNAMIC_BOUNDARY`](../src/constants/prompts.ts#L111) 把系统提示词切成静态段和动态段。[`splitSysPromptPrefix()`](../src/utils/api.ts#L281) 根据这个边界决定哪些 block 可以使用 `global` 或 `org` 级缓存，哪些 block 不能缓存。
 
 读这部分代码时要注意两个方向：
 
@@ -67,9 +67,9 @@ user context 虽然对模型也很重要，但它不是 system prompt。比如 C
 
 ### 6. 压缩不是简单截断
 
-上下文压缩不是把旧消息直接删掉，而是尽量把旧历史转成摘要，同时保留当前任务仍需要的近期消息、附件和 hook 结果。传统压缩路径在 [`compactConversation()`](../src/services/compact/compact.ts#L377) 中生成摘要，再由 [`buildPostCompactMessages()`](../src/services/compact/compact.ts#L326) 重建消息数组。
+上下文压缩不是把旧消息直接删掉，而是尽量把旧历史转成摘要，同时保留当前任务仍需要的近期消息、附件和 hook 结果。传统压缩路径在 [`compactConversation()`](../src/services/compact/compact.ts#L353) 中生成摘要，再由 [`buildPostCompactMessages()`](../src/services/compact/compact.ts#L302) 重建消息数组。
 
-自动压缩由 [`shouldAutoCompact()`](../src/services/compact/autoCompact.ts#L163) 判断阈值，由 [`autoCompactIfNeeded()`](../src/services/compact/autoCompact.ts#L222) 执行。它会先尝试 session memory compact，再退回传统摘要 compact。这样设计是为了尽量减少信息损失，同时保证请求不会超过模型窗口。
+自动压缩由 [`shouldAutoCompact()`](../src/services/compact/autoCompact.ts#L168) 判断阈值，由 [`autoCompactIfNeeded()`](../src/services/compact/autoCompact.ts#L227) 执行。它会先尝试 session memory compact，再退回传统摘要 compact。这样设计是为了尽量减少信息损失，同时保证请求不会超过模型窗口。
 
 ### 7. 记忆召回为什么异步预取
 
@@ -91,88 +91,100 @@ user context 虽然对模型也很重要，但它不是 system prompt。比如 C
 3. `userContext`：项目规则、CLAUDE.md/MEMORY.md、日期。
 4. `messagesForQuery`：真正准备送进模型的历史和工具回合。
 
-如果你能在 [`queryLoop()`](../src/query.ts#L217) 里跟住这四个变量，这个项目的上下文工程基本就串起来了。
+如果你能在 [`queryLoop()`](../src/query.ts#L227) 里跟住这四个变量，这个项目的上下文工程基本就串起来了。
 
-## 三、推荐阅读顺序
+## 三、按调用顺序阅读
 
 ### 快速跳转
 
 | 主题 | 入口 |
 | --- | --- |
-| 每轮主循环 | [`query()`](../src/query.ts#L195)、[`queryLoop()`](../src/query.ts#L217) |
+| 每轮主循环 | [`query()`](../src/query.ts#L201)、[`queryLoop()`](../src/query.ts#L227) |
+| 生产依赖映射 | [`productionDeps()`](../src/query/deps.ts#L26) |
 | 系统/用户动态上下文 | [`getSystemContext()`](../src/context.ts#L116)、[`getUserContext()`](../src/context.ts#L155) |
-| 系统提示词缓存分块 | [`splitSysPromptPrefix()`](../src/utils/api.ts#L304)、[`buildSystemPromptBlocks()`](../src/services/api/claude.ts#L3213) |
-| 上下文注入 API 请求 | [`appendSystemContext()`](../src/utils/api.ts#L420)、[`prependUserContext()`](../src/utils/api.ts#L433) |
-| 流式模型请求 | [`queryModelWithStreaming()`](../src/services/api/claude.ts#L752) |
-| 自动压缩判断与执行 | [`shouldAutoCompact()`](../src/services/compact/autoCompact.ts#L163)、[`autoCompactIfNeeded()`](../src/services/compact/autoCompact.ts#L222) |
-| 压缩摘要与重建 | [`buildPostCompactMessages()`](../src/services/compact/compact.ts#L326)、[`compactConversation()`](../src/services/compact/compact.ts#L377) |
-| 附件注入 | [`getAttachmentMessages()`](../src/utils/attachments.ts#L2937) |
-| 相关记忆召回 | [`findRelevantMemories()`](../src/memdir/findRelevantMemories.ts#L31)、[`startRelevantMemoryPrefetch()`](../src/utils/attachments.ts#L2361)、[`filterDuplicateMemoryAttachments()`](../src/utils/attachments.ts#L2520) |
+| 系统提示词缓存分块 | [`splitSysPromptPrefix()`](../src/utils/api.ts#L281)、[`buildSystemPromptBlocks()`](../src/services/api/claude.ts#L3228) |
+| 上下文注入 API 请求 | [`appendSystemContext()`](../src/utils/api.ts#L403)、[`prependUserContext()`](../src/utils/api.ts#L422) |
+| 流式模型请求 | [`queryModelWithStreaming()`](../src/services/api/claude.ts#L759) |
+| 自动压缩判断与执行 | [`calculateTokenWarningState()`](../src/services/compact/autoCompact.ts#L98)、[`shouldAutoCompact()`](../src/services/compact/autoCompact.ts#L168)、[`autoCompactIfNeeded()`](../src/services/compact/autoCompact.ts#L227) |
+| 压缩摘要与重建 | [`buildPostCompactMessages()`](../src/services/compact/compact.ts#L302)、[`compactConversation()`](../src/services/compact/compact.ts#L353) |
+| 附件注入 | [`getAttachmentMessages()`](../src/utils/attachments.ts#L2925) |
+| 相关记忆召回 | [`findRelevantMemories()`](../src/memdir/findRelevantMemories.ts#L31)、[`startRelevantMemoryPrefetch()`](../src/utils/attachments.ts#L2361)、[`filterDuplicateMemoryAttachments()`](../src/utils/attachments.ts#L2502) |
 
 ### 1. 入口和每轮主循环
 
-- [`src/query.ts`](../src/query.ts)
-  - `query()`：外层生成器，负责生命周期收尾。
-  - `queryLoop()`：核心循环，处理消息历史、压缩、API 调用、工具执行、附件注入和下一轮递归。
-  - 重点看这些调用点：
-    - `getMessagesAfterCompactBoundary(messages)`
-    - `applyToolResultBudget(...)`
-    - `deps.microcompact(...)`
-    - `contextCollapse.applyCollapsesIfNeeded(...)`
-    - `deps.autocompact(...)`
-    - `prependUserContext(messagesForQuery, userContext)`
-    - `appendSystemContext(systemPrompt, systemContext)`
-    - `runTools(...)`
-    - `getAttachmentMessages(...)`
+这一段建议按下面的调用顺序看。它是主线，后面所有功能点都会回到这里。
+
+1. [`query(params)`](../src/query.ts#L201)：外层 async generator，负责启动主循环，并在主循环正常结束后标记已消费命令完成。
+2. [`queryLoop(params, consumedCommandUuids)`](../src/query.ts#L227)：真正的 agentic loop，内部用 `while (true)` 承载“模型请求 -> 工具执行 -> 继续请求”的循环。
+3. [`startRelevantMemoryPrefetch(...)`](../src/utils/attachments.ts#L2361)：在每个用户轮次开始时预取相关记忆，后面工具回合结束再消费，避免阻塞主请求。
+4. [`getMessagesAfterCompactBoundary(messages)`](../src/utils/messages.ts#L4643)：丢弃压缩边界之前的旧历史，只保留当前有效上下文。
+5. [`applyToolResultBudget(...)`](../src/utils/toolResultStorage.ts#L924)：先处理过大的工具结果，避免单条 `tool_result` 占满上下文窗口。
+6. [`deps.microcompact(...)`](../src/query.ts#L368) -> [`microcompactMessages(...)`](../src/services/compact/microCompact.ts#L254)：执行局部微压缩，删除或替换可以安全缩短的历史片段。
+7. [`contextCollapse.applyCollapsesIfNeeded(...)`](../src/services/contextCollapse/index.ts#L38)：如果 context collapse 功能开启，在 autocompact 前先做更细粒度的折叠投影。
+8. [`appendSystemContext(systemPrompt, systemContext)`](../src/utils/api.ts#L403)：把系统侧动态上下文追加到 system prompt 尾部。
+9. [`deps.autocompact(...)`](../src/query.ts#L395) -> [`autoCompactIfNeeded(...)`](../src/services/compact/autoCompact.ts#L227)：检查是否需要摘要压缩；如果触发，会返回新的压缩后消息数组。
+10. [`buildPostCompactMessages(compactionResult)`](../src/services/compact/compact.ts#L302)：把压缩边界、摘要、保留消息、附件和 hook 结果按固定顺序拼回消息历史。
+11. [`calculateTokenWarningState(...)`](../src/services/compact/autoCompact.ts#L98)：在真正请求模型前做阻塞阈值检查，防止明显超过窗口的请求继续发送。
+12. [`prependUserContext(messagesForQuery, userContext)`](../src/utils/api.ts#L422)：把 CLAUDE.md、MEMORY.md、日期等用户上下文包装成 meta user message，放到消息数组最前。
+13. [`deps.callModel(...)`](../src/query.ts#L600) -> [`queryModelWithStreaming(...)`](../src/services/api/claude.ts#L759)：发起主模型请求并接收流式事件。
+14. [`runTools(...)`](../src/query.ts#L1323)：如果模型返回 `tool_use`，执行对应工具并生成 `tool_result`。
+15. [`getAttachmentMessages(...)`](../src/utils/attachments.ts#L2925)：工具执行后补充 IDE、文件变更、任务、队列命令等附件上下文。
+16. [`filterDuplicateMemoryAttachments(...)`](../src/utils/attachments.ts#L2502)：消费第 3 步的记忆预取结果，并过滤已经被读写过的记忆。
+17. [`state = next`](../src/query.ts#L1638)：把本轮 assistant、tool_result、attachments 合并成下一轮 `messages`，回到第 2 步继续循环。
 
 ### 2. 系统提示词和动态上下文
 
-- [`src/constants/prompts.ts`](../src/constants/prompts.ts)
-  - `SYSTEM_PROMPT_DYNAMIC_BOUNDARY`：系统提示词缓存边界，边界前可更稳定地复用缓存，边界后是用户/会话动态内容。
-  - `systemPromptSection(...)` 的使用点：把不同提示词片段拆成可缓存小单元。
-- [`src/constants/systemPromptSections.ts`](../src/constants/systemPromptSections.ts)
-  - `systemPromptSection()`：可缓存片段。
-  - `DANGEROUS_uncachedSystemPromptSection()`：每轮重算片段，会破坏缓存。
-  - `resolveSystemPromptSections()`：解析片段并写入缓存。
-- [`src/context.ts`](../src/context.ts)
-  - `getSystemContext()`：采集 git 状态、缓存破坏标记等系统侧动态上下文。
-  - `getUserContext()`：采集 CLAUDE.md/MEMORY.md、当前日期等用户侧上下文。
+系统提示词和动态上下文分两条线：一条产出 system prompt，一条产出每轮动态 context。
+
+1. [`getSystemPrompt(...)`](../src/constants/prompts.ts#L449)：系统提示词总入口，收集静态规则、工具规则、输出风格、模型/环境说明等片段。
+2. [`systemPromptSection(...)`](../src/constants/systemPromptSections.ts#L19)：声明可缓存系统提示词片段，适合稳定内容。
+3. [`DANGEROUS_uncachedSystemPromptSection(...)`](../src/constants/systemPromptSections.ts#L29)：声明每轮重算片段，只适合确实必须动态变化的内容。
+4. [`resolveSystemPromptSections(...)`](../src/constants/systemPromptSections.ts#L40)：解析所有片段；可缓存片段命中缓存就不重新计算。
+5. [`SYSTEM_PROMPT_DYNAMIC_BOUNDARY`](../src/constants/prompts.ts#L111)：插入系统提示词数组中，标记“前面是稳定缓存区，后面是动态区”。
+6. [`getSystemContext()`](../src/context.ts#L116)：采集 git 快照、调试缓存破坏标记等系统侧动态上下文。
+7. [`getUserContext()`](../src/context.ts#L155)：采集 CLAUDE.md/MEMORY.md、当前日期等用户侧上下文。
+8. [`appendSystemContext(...)`](../src/utils/api.ts#L403)：把第 6 步追加到 system prompt 尾部。
+9. [`prependUserContext(...)`](../src/utils/api.ts#L422)：把第 7 步包装成 `<system-reminder>`，作为 meta user message 放到 messages 最前。
 
 ### 3. API 请求成形
 
-- [`src/utils/api.ts`](../src/utils/api.ts)
-  - `appendSystemContext()`：把 `systemContext` 追加到 system prompt 尾部。
-  - `prependUserContext()`：把 `userContext` 包成 `<system-reminder>` meta user message 放到消息历史最前。
-  - `splitSysPromptPrefix()`：按动态边界拆分系统提示词，并决定 cache scope。
-  - `toolToAPISchema()`：把内部 Tool 转成 Anthropic API tool schema。
-- [`src/services/api/claude.ts`](../src/services/api/claude.ts)
-  - `buildSystemPromptBlocks()`：把拆好的 system prompt block 转成 API `text` block，并设置 `cache_control`。
-  - `queryModelWithStreaming()` / `queryModelWithoutStreaming()`：最终发起模型请求。
+API 请求成形是把内部结构转成 Anthropic Messages API 能接受的 payload。
+
+1. [`queryLoop()`](../src/query.ts#L227)：准备 `messagesForQuery`、`fullSystemPrompt`、`tools`、`thinkingConfig` 等入参。
+2. [`prependUserContext(...)`](../src/utils/api.ts#L422)：把用户上下文插入到 API messages 前部。
+3. [`queryModelWithStreaming(...)`](../src/services/api/claude.ts#L759)：流式请求入口，负责组装 API 参数并转发流式事件。
+4. [`normalizeMessagesForAPI(...)`](../src/utils/messages.ts#L1989)：把内部 `Message` 转成 API 需要的 user/assistant message，并处理 tool_use/tool_result 配对等细节。
+5. [`toolToAPISchema(...)`](../src/utils/api.ts#L127)：把内部 Tool 对象转成 API tool schema，包括工具描述、输入 schema、严格模式、缓存控制等。
+6. [`splitSysPromptPrefix(...)`](../src/utils/api.ts#L281)：按 `SYSTEM_PROMPT_DYNAMIC_BOUNDARY` 拆 system prompt，决定每段是否能用缓存。
+7. [`buildSystemPromptBlocks(...)`](../src/services/api/claude.ts#L3228)：把第 6 步的分块转成 API `text` block，并设置 `cache_control`。
+8. [`queryModelWithoutStreaming(...)`](../src/services/api/claude.ts#L713)：非流式请求入口，主要用于小模型 side query、分类、摘要辅助等场景。
 
 ### 4. 附件、记忆和额外上下文
 
-- [`src/utils/attachments.ts`](../src/utils/attachments.ts)
-  - `getAttachmentMessages()`：把 IDE 选区、文件变更、todo、队列命令、任务状态、hook 输出等转成模型可见 attachment。
-  - `startRelevantMemoryPrefetch()`：在主循环开始时预取相关记忆，后续零等待注入。
-  - `filterDuplicateMemoryAttachments()`：避免重复注入已经被模型读写过的记忆。
-- [`src/memdir/findRelevantMemories.ts`](../src/memdir/findRelevantMemories.ts)
-  - `findRelevantMemories()`：扫描记忆 manifest，让小模型挑选最多 5 个相关记忆。
-- [`src/memdir/memdir.ts`](../src/memdir/memdir.ts)
-  - `loadMemoryPrompt()` / `buildMemoryLines()`：构建文件型记忆系统的行为说明。
+附件和记忆不是主 system prompt 的一部分，它们是在每轮工具回合之后补进 messages 的额外上下文。
+
+1. [`startRelevantMemoryPrefetch(...)`](../src/utils/attachments.ts#L2361)：在主循环开始时根据用户 query 异步预取相关记忆。
+2. [`findRelevantMemories(...)`](../src/memdir/findRelevantMemories.ts#L31)：扫描记忆文件头，让小模型挑选最多 5 个相关记忆文件。
+3. [`selectRelevantMemories(...)`](../src/memdir/findRelevantMemories.ts#L74)：把 query、记忆 manifest、最近使用工具一起发给小模型，让它返回文件名列表。
+4. [`getAttachmentMessages(...)`](../src/utils/attachments.ts#L2925)：工具执行完后，把 IDE 选区、文件变更、todo、队列命令、任务状态、hook 输出等转成 attachment message。
+5. [`filterDuplicateMemoryAttachments(...)`](../src/utils/attachments.ts#L2502)：消费第 1 步预取结果前去重，避免重复注入模型已经读过或写过的记忆。
+6. [`createAttachmentMessage(...)`](../src/utils/attachments.ts#L3189)：把 attachment 数据包装成内部 `AttachmentMessage`，后续随 `toolResults` 一起进入下一轮 `state.messages`。
+7. [`loadMemoryPrompt(...)`](../src/memdir/memdir.ts#L419)：构建“如何保存/使用文件型记忆”的系统说明；它是记忆规则，不是某次 query 的相关记忆内容。
 
 ### 5. 上下文压缩和窗口管理
 
-- [`src/services/compact/autoCompact.ts`](../src/services/compact/autoCompact.ts)
-  - `getEffectiveContextWindowSize()`：模型上下文窗口扣掉摘要输出预留。
-  - `calculateTokenWarningState()`：根据 token 使用量判断 warning/error/autocompact/blocking 状态。
-  - `shouldAutoCompact()`：判断是否触发自动压缩。
-  - `autoCompactIfNeeded()`：执行自动压缩，先尝试 session memory compact，再退回传统摘要 compact。
-- [`src/services/compact/compact.ts`](../src/services/compact/compact.ts)
-  - `compactConversation()`：用 forked agent 总结旧历史，并保留必要的近期上下文。
-  - `buildPostCompactMessages()`：把压缩结果重新拼成消息历史。
-  - `stripImagesFromMessages()`：压缩摘要时剥离图片/文档块，降低摘要请求爆窗概率。
-- [`src/services/contextCollapse/index.ts`](../src/services/contextCollapse/index.ts)
-  - 当前恢复树里是 no-op shim，但 [`src/query.ts`](../src/query.ts) 已保留调用位；完整实现应在这里负责更细粒度的 collapse projection。
+窗口管理有两个目标：先尽量保留细粒度上下文，真的快超窗时再用摘要替换旧历史。
+
+1. [`applyToolResultBudget(...)`](../src/utils/toolResultStorage.ts#L924)：最早执行，先缩短超大工具结果。
+2. [`microcompactMessages(...)`](../src/services/compact/microCompact.ts#L254)：做局部压缩，通常比整段摘要更少损失信息。
+3. [`contextCollapse.applyCollapsesIfNeeded(...)`](../src/services/contextCollapse/index.ts#L38)：完整实现中用于更细粒度的上下文折叠；当前恢复树是 no-op shim。
+4. [`calculateTokenWarningState(...)`](../src/services/compact/autoCompact.ts#L98)：根据 token 使用量计算 warning/error/autocompact/blocking 状态。
+5. [`shouldAutoCompact(...)`](../src/services/compact/autoCompact.ts#L168)：排除压缩代理递归、reactive-only、context-collapse 接管等场景后，判断是否触发自动压缩。
+6. [`autoCompactIfNeeded(...)`](../src/services/compact/autoCompact.ts#L227)：自动压缩入口，先尝试 session memory compact，再退回传统摘要 compact。
+7. [`compactConversation(...)`](../src/services/compact/compact.ts#L353)：传统摘要压缩，用 forked agent 总结旧历史，并收集压缩后仍需保留的附件。
+8. [`stripImagesFromMessages(...)`](../src/services/compact/compact.ts#L137)：摘要请求前剥离图片/文档块，降低压缩请求本身爆窗的概率。
+9. [`buildPostCompactMessages(...)`](../src/services/compact/compact.ts#L302)：把压缩结果重建为新的消息历史，顺序是边界、摘要、保留消息、附件、hook 结果。
+10. [`queryLoop()`](../src/query.ts#L227)：收到压缩结果后替换 `messagesForQuery`，继续当前请求或进入下一轮。
 
 ## 四、主调用关系
 
@@ -214,19 +226,19 @@ flowchart TD
 
 `SYSTEM_PROMPT_DYNAMIC_BOUNDARY` 是阅读系统提示词的关键。`splitSysPromptPrefix()` 会把边界前的稳定内容作为更适合缓存的块，边界后的动态内容不走全局缓存。这样可以让“产品规则和工具规则”稳定复用，又避免把用户目录、git 状态这类动态信息错误缓存到全局。
 
-看代码时先找 [`SYSTEM_PROMPT_DYNAMIC_BOUNDARY`](../src/constants/prompts.ts#L111) 被插入的位置，再看 [`splitSysPromptPrefix()`](../src/utils/api.ts#L304) 如何扫描数组。这里最重要的是顺序：边界前后的顺序决定缓存策略，不能只看字符串内容。
+看代码时先找 [`SYSTEM_PROMPT_DYNAMIC_BOUNDARY`](../src/constants/prompts.ts#L111) 被插入的位置，再看 [`splitSysPromptPrefix()`](../src/utils/api.ts#L281) 如何扫描数组。这里最重要的是顺序：边界前后的顺序决定缓存策略，不能只看字符串内容。
 
 ### CLAUDE.md / MEMORY.md 注入
 
 `getUserContext()` 通过 `getMemoryFiles()` 和 `getClaudeMds()` 读取规则文件，然后 `prependUserContext()` 把它们包装成 `<system-reminder>`。这意味着这些内容在 API 里是 user message，不是 system prompt，但它们被放在消息历史最前，模型每轮都能看到。
 
-看代码时重点关注 [`getUserContext()`](../src/context.ts#L155) 里的关闭条件：环境变量可以硬关闭 CLAUDE.md，bare 模式会跳过自动发现，但仍尊重显式 add-dir。然后再看 [`prependUserContext()`](../src/utils/api.ts#L433) 如何把这些内容包装成 meta message。
+看代码时重点关注 [`getUserContext()`](../src/context.ts#L155) 里的关闭条件：环境变量可以硬关闭 CLAUDE.md，bare 模式会跳过自动发现，但仍尊重显式 add-dir。然后再看 [`prependUserContext()`](../src/utils/api.ts#L422) 如何把这些内容包装成 meta message。
 
 ### 工具结果回灌
 
 `queryLoop()` 收到 `tool_use` 后不会结束整轮，而是执行工具、生成 `tool_result`，再把它们加入 `state.messages` 进入下一次循环。这样模型能基于工具结果继续推理。代码里特别注意 tool_use/tool_result 配对，因为 Anthropic API 要求每个 tool_use 都有对应 tool_result。
 
-看代码时可以从 [`runTools(...)`](../src/query.ts#L1313) 往后读，直到构造 `next: State` 的位置。你会看到工具结果、附件、记忆召回结果被合并进下一轮消息，这就是为什么工具执行结果会影响后续推理。
+看代码时可以从 [`runTools(...)`](../src/query.ts#L1323) 往后读，直到构造 `next: State` 的位置。你会看到工具结果、附件、记忆召回结果被合并进下一轮消息，这就是为什么工具执行结果会影响后续推理。
 
 ### 自动压缩
 
@@ -238,7 +250,7 @@ flowchart TD
 
 压缩后的消息顺序由 `buildPostCompactMessages()` 固定：边界消息、摘要消息、保留消息、附件、hook 结果。
 
-看代码时不要只看 `compactConversation()`。真正决定“该不该压缩”的是 [`calculateTokenWarningState()`](../src/services/compact/autoCompact.ts#L93) 和 [`shouldAutoCompact()`](../src/services/compact/autoCompact.ts#L163)；真正决定“压缩后历史长什么样”的是 [`buildPostCompactMessages()`](../src/services/compact/compact.ts#L326)。
+看代码时不要只看 `compactConversation()`。真正决定“该不该压缩”的是 [`calculateTokenWarningState()`](../src/services/compact/autoCompact.ts#L98) 和 [`shouldAutoCompact()`](../src/services/compact/autoCompact.ts#L168)；真正决定“压缩后历史长什么样”的是 [`buildPostCompactMessages()`](../src/services/compact/compact.ts#L302)。
 
 ### 相关记忆召回
 

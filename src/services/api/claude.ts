@@ -699,13 +699,17 @@ export type Options = {
   fastMode?: boolean
   advisorModel?: string
   addNotification?: (notif: Notification) => void
-  // API-side task budget (output_config.task_budget). Distinct from the
-  // tokenBudget.ts +500k auto-continue feature — this one is sent to the API
-  // so the model can pace itself. `remaining` is computed by the caller
-  // (query.ts decrements across the agentic loop).
+  // API 侧任务预算，会随请求发给模型；不同于本地 tokenBudget 自动续写机制。
+  // remaining 由 query.ts 在多轮工具循环和压缩边界之间维护。
   taskBudget?: { total: number; remaining?: number }
 }
 
+/**
+ * 非流式模型请求入口。
+ *
+ * 内部仍复用流式生成器，只是消费完整个流后返回最终 assistant message。
+ * 这样可以共享日志、VCR、错误处理和用量统计逻辑。
+ */
 export async function queryModelWithoutStreaming({
   messages,
   systemPrompt,
@@ -721,8 +725,7 @@ export async function queryModelWithoutStreaming({
   signal: AbortSignal
   options: Options
 }): Promise<AssistantMessage> {
-  // Store the assistant message but continue consuming the generator to ensure
-  // logAPISuccessAndDuration gets called (which happens after all yields)
+  // 记录 assistant message，但继续消费生成器，确保流结束后的成功日志和耗时统计会执行。
   let assistantMessage: AssistantMessage | undefined
   for await (const message of withStreamingVCR(messages, async function* () {
     yield* queryModel(
@@ -739,8 +742,7 @@ export async function queryModelWithoutStreaming({
     }
   }
   if (!assistantMessage) {
-    // If the signal was aborted, throw APIUserAbortError instead of a generic error
-    // This allows callers to handle abort scenarios gracefully
+    // abort 场景抛专用错误，方便调用方区分用户取消和真实 API 异常。
     if (signal.aborted) {
       throw new APIUserAbortError()
     }
@@ -749,6 +751,11 @@ export async function queryModelWithoutStreaming({
   return assistantMessage
 }
 
+/**
+ * 流式模型请求入口。
+ *
+ * queryLoop 通过该函数接收 request_start、assistant 增量、工具调用和 API 错误等事件。
+ */
 export async function* queryModelWithStreaming({
   messages,
   systemPrompt,
@@ -3210,6 +3217,14 @@ export function addCacheBreakpoints(
   return result
 }
 
+/**
+ * 把内部 system prompt 字符串数组转换成 Anthropic API 的 text block。
+ *
+ * 调用链：
+ * 1. `splitSysPromptPrefix` 根据动态边界拆分稳定块和动态块。
+ * 2. 本函数按每块的 cacheScope 决定是否附加 `cache_control`。
+ * 3. 返回值直接进入 Messages API 的 `system` 字段。
+ */
 export function buildSystemPromptBlocks(
   systemPrompt: SystemPrompt,
   enablePromptCaching: boolean,

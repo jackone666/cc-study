@@ -29,15 +29,15 @@ import {
   type TimeBasedMCConfig,
 } from './timeBasedMCConfig.js'
 
-// Inline from utils/toolResultStorage.ts — importing that file pulls in
-// sessionStorage → utils/messages → services/api/errors, completing a
-// circular-deps loop back through this file via promptCacheBreakDetection.
-// Drift is caught by a test asserting equality with the source-of-truth.
+// 从 utils/toolResultStorage.ts 内联而来。
+// 如果直接导入该文件，会形成 sessionStorage -> utils/messages -> services/api/errors
+// 再经 promptCacheBreakDetection 回到本文件的循环依赖。
+// 上游用测试校验它和源实现保持一致，避免两边漂移。
 export const TIME_BASED_MC_CLEARED_MESSAGE = '[Old tool result content cleared]'
 
 const IMAGE_MAX_TOKEN_SIZE = 2000
 
-// Only compact these tools
+// 只压缩这些工具的结果，避免误删模型仍需要的关键上下文。
 const COMPACTABLE_TOOLS = new Set<string>([
   FILE_READ_TOOL_NAME,
   ...SHELL_TOOL_NAMES,
@@ -49,10 +49,10 @@ const COMPACTABLE_TOOLS = new Set<string>([
   FILE_WRITE_TOOL_NAME,
 ])
 
-// --- Cached microcompact state (ant-only, gated by feature('CACHED_MICROCOMPACT')) ---
+// --- cached microcompact 状态，仅内部构建且开启 CACHED_MICROCOMPACT 时使用 ---
 
-// Lazy-initialized cached MC module and state to avoid importing in external builds.
-// The imports and state live inside feature() checks for dead code elimination.
+// cached microcompact 模块和状态采用懒初始化，避免外部构建导入内部代码。
+// import 和状态都放在 feature() 检查内，方便构建阶段做死代码消除。
 let cachedMCModule: typeof import('./cachedMicrocompact.js') | null = null
 let cachedMCState: import('./cachedMicrocompact.js').CachedMCState | null = null
 let pendingCacheEdits:
@@ -81,9 +81,9 @@ function ensureCachedMCState(): import('./cachedMicrocompact.js').CachedMCState 
 }
 
 /**
- * Get new pending cache edits to be included in the next API request.
- * Returns null if there are no new pending edits.
- * Clears the pending state (caller must pin them after insertion).
+ * 取出下一次 API 请求需要携带的新 cache edit。
+ * 如果没有新的待发送 edit，则返回 null。
+ * 读取后会清空 pending 状态，调用方插入后必须把它们 pin 住。
  */
 export function consumePendingCacheEdits():
   | import('./cachedMicrocompact.js').CacheEditsBlock
@@ -94,8 +94,8 @@ export function consumePendingCacheEdits():
 }
 
 /**
- * Get all previously-pinned cache edits that must be re-sent at their
- * original positions for cache hits.
+ * 取出此前已经 pin 住的 cache edit。
+ * 这些 edit 必须按原位置重新发送，才能让服务端缓存继续命中。
  */
 export function getPinnedCacheEdits(): import('./cachedMicrocompact.js').PinnedCacheEdits[] {
   if (!cachedMCState) {
@@ -105,8 +105,8 @@ export function getPinnedCacheEdits(): import('./cachedMicrocompact.js').PinnedC
 }
 
 /**
- * Pin a new cache_edits block to a specific user message position.
- * Called after inserting new edits so they are re-sent in subsequent calls.
+ * 把新的 cache_edits block 绑定到某个 user message 位置。
+ * 新 edit 插入后调用这个函数，后续请求才能继续重发它。
  */
 export function pinCacheEdits(
   userMessageIndex: number,
@@ -118,8 +118,8 @@ export function pinCacheEdits(
 }
 
 /**
- * Marks all registered tools as sent to the API.
- * Called after a successful API response.
+ * 标记所有已注册工具都已经发送给 API。
+ * 成功收到 API 响应后调用，避免重复登记同一批工具。
  */
 export function markToolsSentToAPIState(): void {
   if (cachedMCState && cachedMCModule) {
@@ -134,7 +134,7 @@ export function resetMicrocompactState(): void {
   pendingCacheEdits = null
 }
 
-// Helper to calculate tool result tokens
+// 粗估工具结果 token 的辅助函数。
 function calculateToolResultTokens(block: ToolResultBlockParam): number {
   if (!block.content) {
     return 0
@@ -144,12 +144,12 @@ function calculateToolResultTokens(block: ToolResultBlockParam): number {
     return roughTokenCountEstimation(block.content)
   }
 
-  // Array of TextBlockParam | ImageBlockParam | DocumentBlockParam
+  // 这里可能是 TextBlockParam / ImageBlockParam / DocumentBlockParam 数组。
   return block.content.reduce((sum, item) => {
     if (item.type === 'text') {
       return sum + roughTokenCountEstimation(item.text)
     } else if (item.type === 'image' || item.type === 'document') {
-      // Images/documents are approximately 2000 tokens regardless of format
+      // 图片和文档无论格式如何，都按约 2000 token 粗估。
       return sum + IMAGE_MAX_TOKEN_SIZE
     }
     return sum
@@ -157,9 +157,8 @@ function calculateToolResultTokens(block: ToolResultBlockParam): number {
 }
 
 /**
- * Estimate token count for messages by extracting text content
- * Used for rough token estimation when we don't have accurate API counts
- * Pads estimate by 4/3 to be conservative since we're approximating
+ * 通过抽取文本内容粗估消息 token 数。
+ * 当没有准确 API 计数时使用，最后按 4/3 放大，给近似估算留出保守余量。
  */
 export function estimateMessageTokens(messages: Message[]): number {
   let totalTokens = 0
@@ -181,34 +180,33 @@ export function estimateMessageTokens(messages: Message[]): number {
       } else if (block.type === 'image' || block.type === 'document') {
         totalTokens += IMAGE_MAX_TOKEN_SIZE
       } else if (block.type === 'thinking') {
-        // Match roughTokenCountEstimationForBlock: count only the thinking
-        // text, not the JSON wrapper or signature (signature is metadata,
-        // not model-tokenized content).
+        // 与 roughTokenCountEstimationForBlock 保持一致：只统计 thinking 文本，
+        // 不统计 JSON 包装和 signature；signature 是元数据，不是模型实际分词内容。
         totalTokens += roughTokenCountEstimation(block.thinking)
       } else if (block.type === 'redacted_thinking') {
         totalTokens += roughTokenCountEstimation(block.data)
       } else if (block.type === 'tool_use') {
-        // Match roughTokenCountEstimationForBlock: count name + input,
-        // not the JSON wrapper or id field.
+        // 与 roughTokenCountEstimationForBlock 保持一致：统计 name + input，
+        // 不统计 JSON 包装和 id 字段。
         totalTokens += roughTokenCountEstimation(
           block.name + jsonStringify(block.input ?? {}),
         )
       } else {
-        // server_tool_use, web_search_tool_result, etc.
+        // 其他服务端工具块，例如 server_tool_use、web_search_tool_result 等。
         totalTokens += roughTokenCountEstimation(jsonStringify(block))
       }
     }
   }
 
-  // Pad estimate by 4/3 to be conservative since we're approximating
+  // 粗估值按 4/3 放大，避免低估导致后续窗口判断过于乐观。
   return Math.ceil(totalTokens * (4 / 3))
 }
 
 export type PendingCacheEdits = {
   trigger: 'auto'
   deletedToolIds: string[]
-  // Baseline cumulative cache_deleted_input_tokens from the previous API response,
-  // used to compute the per-operation delta (the API value is sticky/cumulative)
+  // 上一次 API 响应中的累计 cache_deleted_input_tokens 基线。
+  // API 返回值是累计值，所以要用它计算本次操作的增量。
   baselineCacheDeletedTokens: number
 }
 
@@ -220,8 +218,8 @@ export type MicrocompactResult = {
 }
 
 /**
- * Walk messages and collect tool_use IDs whose tool name is in
- * COMPACTABLE_TOOLS, in encounter order. Shared by both microcompact paths.
+ * 按消息顺序收集可压缩工具的 tool_use id。
+ * 两条 microcompact 路径都会复用这个收集逻辑。
  */
 function collectCompactableToolIds(messages: Message[]): string[] {
   const ids: string[] = []
@@ -240,39 +238,34 @@ function collectCompactableToolIds(messages: Message[]): string[] {
   return ids
 }
 
-// Prefix-match because promptCategory.ts sets the querySource to
-// 'repl_main_thread:outputStyle:<style>' when a non-default output style
-// is active. The bare 'repl_main_thread' is only used for the default style.
-// query.ts:350/1451 use the same startsWith pattern; the pre-existing
-// cached-MC `=== 'repl_main_thread'` check was a latent bug — users with a
-// non-default output style were silently excluded from cached MC.
+// 主线程 querySource 可能带 outputStyle 后缀，因此这里必须用前缀匹配。
 function isMainThreadSource(querySource: QuerySource | undefined): boolean {
   return !querySource || querySource.startsWith('repl_main_thread')
 }
 
+/**
+ * 微压缩入口。
+ *
+ * 调用顺序：
+ * 1. 先尝试基于时间的微压缩，清理旧工具结果，减少冷缓存重写成本。
+ * 2. 如果缓存编辑能力可用，再尝试 cached microcompact，通过 API cache edit 删除旧工具结果。
+ * 3. 如果都不适用，则原样返回消息，后续由 autocompact 处理整体上下文压力。
+ */
 export async function microcompactMessages(
   messages: Message[],
   toolUseContext?: ToolUseContext,
   querySource?: QuerySource,
 ): Promise<MicrocompactResult> {
-  // Clear suppression flag at start of new microcompact attempt
+  // 每次微压缩尝试开始时重置警告抑制状态。
   clearCompactWarningSuppression()
 
-  // Time-based trigger runs first and short-circuits. If the gap since the
-  // last assistant message exceeds the threshold, the server cache has expired
-  // and the full prefix will be rewritten regardless — so content-clear old
-  // tool results now, before the request, to shrink what gets rewritten.
-  // Cached MC (cache-editing) is skipped when this fires: editing assumes a
-  // warm cache, and we just established it's cold.
+  // 时间触发优先：如果服务端缓存大概率已冷，直接清理旧工具结果，减少即将重写的内容。
   const timeBasedResult = maybeTimeBasedMicrocompact(messages, querySource)
   if (timeBasedResult) {
     return timeBasedResult
   }
 
-  // Only run cached MC for the main thread to prevent forked agents
-  // (session_memory, prompt_suggestion, etc.) from registering their
-  // tool_results in the global cachedMCState, which would cause the main
-  // thread to try deleting tools that don't exist in its own conversation.
+  // cached microcompact 只在主线程运行，避免子代理把自己的 tool_result 注册进全局缓存编辑状态。
   if (feature('CACHED_MICROCOMPACT')) {
     const mod = await getCachedMCModule()
     const model = toolUseContext?.options.mainLoopModel ?? getMainLoopModel()
@@ -285,22 +278,14 @@ export async function microcompactMessages(
     }
   }
 
-  // Legacy microcompact path removed — tengu_cache_plum_violet is always true.
-  // For contexts where cached microcompact is not available (external builds,
-  // non-ant users, unsupported models, sub-agents), no compaction happens here;
-  // autocompact handles context pressure instead.
+  // cached microcompact 不可用时，这里不做局部压缩，交给后续 autocompact 处理整体压力。
   return { messages }
 }
 
 /**
- * Cached microcompact path - uses cache editing API to remove tool results
- * without invalidating the cached prefix.
+ * cached microcompact 路径：通过 API cache edit 删除旧工具结果，不改本地消息内容。
  *
- * Key differences from regular microcompact:
- * - Does NOT modify local message content (cache_reference and cache_edits are added at API layer)
- * - Uses count-based trigger/keep thresholds from GrowthBook config
- * - Takes precedence over regular microcompact (no disk persistence)
- * - Tracks tool results and queues cache edits for the API layer
+ * 它只排队缓存编辑指令，真正的 cache_reference / cache_edits 会在 API 层注入。
  */
 async function cachedMicrocompactPath(
   messages: Message[],
@@ -311,7 +296,7 @@ async function cachedMicrocompactPath(
   const config = mod.getCachedMCConfig()
 
   const compactableToolIds = new Set(collectCompactableToolIds(messages))
-  // Second pass: register tool results grouped by user message
+  // 第二遍扫描：按 user message 分组登记可编辑的 tool_result。
   for (const message of messages) {
     if (message.type === 'user' && Array.isArray(message.message.content)) {
       const groupIds: string[] = []
@@ -332,7 +317,7 @@ async function cachedMicrocompactPath(
   const toolsToDelete = mod.getToolResultsToDelete(state)
 
   if (toolsToDelete.length > 0) {
-    // Create and queue the cache_edits block for the API layer
+    // 创建 cache_edits block 并排队，后续由 API 层真正注入请求。
     const cacheEdits = mod.createCacheEditsBlock(state, toolsToDelete)
     if (cacheEdits) {
       pendingCacheEdits = cacheEdits
@@ -342,7 +327,7 @@ async function cachedMicrocompactPath(
       `Cached MC deleting ${toolsToDelete.length} tool(s): ${toolsToDelete.join(', ')}`,
     )
 
-    // Log the event
+    // 记录本次 cached microcompact 事件。
     logEvent('tengu_cached_microcompact', {
       toolsDeleted: toolsToDelete.length,
       deletedToolIds: toolsToDelete.join(
@@ -355,22 +340,21 @@ async function cachedMicrocompactPath(
       keepRecent: config.keepRecent,
     })
 
-    // Suppress warning after successful compaction
+    // 成功压缩后抑制本轮上下文窗口警告。
     suppressCompactWarning()
 
-    // Notify cache break detection that cache reads will legitimately drop
+    // 通知缓存断裂检测：接下来 cache read 下降是本次压缩导致的正常现象。
     if (feature('PROMPT_CACHE_BREAK_DETECTION')) {
-      // Pass the actual querySource — isMainThreadSource now prefix-matches
-      // so output-style variants enter here, and getTrackingKey keys on the
-      // full source string, not the 'repl_main_thread' prefix.
+      // 传入真实 querySource。isMainThreadSource 会做前缀匹配，
+      // 因此带 output style 的变体也能进入这里；getTrackingKey 仍使用完整 source 字符串，
+      // 而不是只使用 repl_main_thread 前缀。
       notifyCacheDeletion(querySource ?? 'repl_main_thread')
     }
 
-    // Return messages unchanged - cache_reference and cache_edits are added at API layer
-    // Boundary message is deferred until after API response so we can use
-    // actual cache_deleted_input_tokens from the API instead of client-side estimates
-    // Capture the baseline cumulative cache_deleted_input_tokens from the last
-    // assistant message so we can compute a per-operation delta after the API call
+    // 本地 messages 保持不变；cache_reference 和 cache_edits 会由 API 层追加。
+    // 边界消息延后到 API 响应后再写入，这样可以使用 API 返回的真实
+    // cache_deleted_input_tokens，而不是客户端估算值。
+    // 这里先捕获最近 assistant 消息里的累计基线，API 调用后再计算本次增量。
     const lastAsst = messages.findLast(m => m.type === 'assistant')
     const baseline =
       lastAsst?.type === 'assistant'
@@ -394,40 +378,40 @@ async function cachedMicrocompactPath(
     }
   }
 
-  // No compaction needed, return messages unchanged
+  // 没有需要压缩的内容，原样返回消息。
   return { messages }
 }
 
 /**
- * Time-based microcompact: when the gap since the last main-loop assistant
- * message exceeds the configured threshold, content-clear all but the most
- * recent N compactable tool results.
+ * 基于时间的 microcompact。
+ * 当距离上一次主循环 assistant 消息的时间超过阈值时，清空除最近 N 个以外的
+ * 可压缩工具结果内容。
  *
- * Returns null when the trigger doesn't fire (disabled, wrong source, gap
- * under threshold, nothing to clear) — caller falls through to other paths.
+ * 未触发时返回 null，例如开关关闭、来源不对、间隔不足或没有可清理内容；
+ * 调用方随后会继续尝试其他压缩路径。
  *
- * Unlike cached MC, this mutates message content directly. The cache is cold,
- * so there's no cached prefix to preserve via cache_edits.
+ * 和 cached microcompact 不同，这条路径会直接修改消息内容。
+ * 此时缓存大概率已经变冷，因此无需通过 cache_edits 保留缓存前缀。
  */
 /**
- * Check whether the time-based trigger should fire for this request.
+ * 判断本次请求是否应该触发基于时间的 microcompact。
  *
- * Returns the measured gap (minutes since last assistant message) when the
- * trigger fires, or null when it doesn't (disabled, wrong source, under
- * threshold, no prior assistant, unparseable timestamp).
+ * 触发时返回测得的间隔分钟数；不触发时返回 null。
+ * 不触发原因包括开关关闭、来源不对、未达到阈值、没有历史 assistant 消息、
+ * 或时间戳无法解析。
  *
- * Extracted so other pre-request paths (e.g. snip force-apply) can consult
- * the same predicate without coupling to the tool-result clearing action.
+ * 抽成独立函数，是为了让其他请求前路径也能复用同一判断逻辑，
+ * 例如强制 snip，而不必耦合到工具结果清理动作。
  */
 export function evaluateTimeBasedTrigger(
   messages: Message[],
   querySource: QuerySource | undefined,
 ): { gapMinutes: number; config: TimeBasedMCConfig } | null {
   const config = getTimeBasedMCConfig()
-  // Require an explicit main-thread querySource. isMainThreadSource treats
-  // undefined as main-thread (for cached-MC backward-compat), but several
-  // callers (/context, /compact, analyzeContext) invoke microcompactMessages
-  // without a source for analysis-only purposes — they should not trigger.
+  // 这里要求显式 main-thread querySource。
+  // isMainThreadSource 为了兼容 cached microcompact，会把 undefined 当作主线程；
+  // 但 /context、/compact、analyzeContext 等分析路径调用 microcompactMessages 时没有 source，
+  // 这些场景不应该触发真正清理。
   if (!config.enabled || !querySource || !isMainThreadSource(querySource)) {
     return null
   }
@@ -455,9 +439,9 @@ function maybeTimeBasedMicrocompact(
 
   const compactableIds = collectCompactableToolIds(messages)
 
-  // Floor at 1: slice(-0) returns the full array (paradoxically keeps
-  // everything), and clearing ALL results leaves the model with zero working
-  // context. Neither degenerate is sensible — always keep at least the last.
+  // 至少保留 1 个：slice(-0) 会返回完整数组，反而什么都不清；
+  // 如果清空所有结果，模型又会失去当前工作上下文。
+  // 两种极端都不合理，所以始终至少保留最后一个。
   const keepRecent = Math.max(1, config.keepRecent)
   const keepSet = new Set(compactableIds.slice(-keepRecent))
   const clearSet = new Set(compactableIds.filter(id => !keepSet.has(id)))
@@ -509,19 +493,17 @@ function maybeTimeBasedMicrocompact(
   )
 
   suppressCompactWarning()
-  // Cached-MC state (module-level) holds tool IDs registered on prior turns.
-  // We just content-cleared some of those tools AND invalidated the server
-  // cache by changing prompt content. If cached-MC runs next turn with the
-  // stale state, it would try to cache_edit tools whose server-side entries
-  // no longer exist. Reset it.
+  // cached microcompact 的模块级状态保存了前几轮登记过的工具 id。
+  // 这里刚刚清空了其中一些工具内容，并且修改 prompt 内容导致服务端缓存失效。
+  // 如果下一轮继续带着旧状态运行 cached microcompact，就会尝试编辑服务端已不存在的条目。
+  // 因此必须重置 cached microcompact 状态。
   resetMicrocompactState()
-  // We just changed the prompt content — the next response's cache read will
-  // be low, but that's us, not a break. Tell the detector to expect a drop.
-  // notifyCacheDeletion (not notifyCompaction) because it's already imported
-  // here and achieves the same false-positive suppression — adding the second
-  // symbol to the import was flagged by the circular-deps check.
-  // Pass the actual querySource: getTrackingKey returns the full source string
-  // (e.g. 'repl_main_thread:outputStyle:custom'), not just the prefix.
+  // 刚刚修改了 prompt 内容，所以下一次响应的 cache read 下降是预期结果，不是缓存异常断裂。
+  // 通知检测器预期这次下降，避免误报。
+  // 这里使用已导入的 notifyCacheDeletion，而不是再引入 notifyCompaction；
+  // 两者都能抑制误报，额外导入会触发循环依赖检查。
+  // 传入真实 querySource：getTrackingKey 使用完整 source 字符串，
+  // 例如 repl_main_thread:outputStyle:custom，而不是只使用前缀。
   if (feature('PROMPT_CACHE_BREAK_DETECTION') && querySource) {
     notifyCacheDeletion(querySource)
   }

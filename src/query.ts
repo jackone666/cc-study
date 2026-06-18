@@ -192,6 +192,12 @@ type State = {
   transition: Continue | undefined
 }
 
+/**
+ * 对外暴露的模型请求生成器。
+ *
+ * 它只负责包一层生命周期管理：真正的上下文组装、模型请求、工具执行都在 queryLoop 中完成。
+ * queryLoop 正常返回后，这里会把本轮已经消费的排队命令标记为 completed。
+ */
 export async function* query(
   params: QueryParams,
 ): AsyncGenerator<
@@ -204,16 +210,20 @@ export async function* query(
 > {
   const consumedCommandUuids: string[] = []
   const terminal = yield* queryLoop(params, consumedCommandUuids)
-  // Only reached if queryLoop returned normally. Skipped on throw (error
-  // propagates through yield*) and on .return() (Return completion closes
-  // both generators). This gives the same asymmetric started-without-completed
-  // signal as print.ts's drainCommandQueue when the turn fails.
+  // 只有 queryLoop 正常结束才会走到这里；异常或外部 return 会保留 started 但未 completed 的状态。
   for (const uuid of consumedCommandUuids) {
     notifyCommandLifecycle(uuid, 'completed')
   }
   return terminal
 }
 
+/**
+ * Claude Code 的主上下文循环。
+ *
+ * 每次循环都会按固定顺序整理上下文：取压缩边界后的历史、控制工具结果大小、
+ * 执行微压缩/自动压缩、拼接 system/user context、请求模型、执行工具、注入附件，
+ * 最后把新消息写回 state 并进入下一轮，直到模型不再请求工具或达到终止条件。
+ */
 async function* queryLoop(
   params: QueryParams,
   consumedCommandUuids: string[],
