@@ -1,6 +1,6 @@
-# Claude Code 源码还原
+# Claude Code 源码学习
 
-> 从 `@anthropic-ai/claude-code` npm 包的 source map 中还原的完整 TypeScript 源码，**可本地运行**
+> 从 `@anthropic-ai/claude-code` npm 包的 source map 中还原的 TypeScript 源码学习仓库，包含可运行源码、中文注释和源码阅读文档。
 
 <p align="center">
   <img src="preview.png?raw=true" alt="Claude Code CLI" width="700">
@@ -8,6 +8,34 @@
 
 > [!WARNING]
 > 本仓库为**非官方**版本，基于公开 npm 发布包 source map 还原，**仅供研究学习**。源码版权归 [Anthropic](https://www.anthropic.com) 所有。
+
+---
+
+## 源码阅读入口
+
+如果你想先建立整体理解，再进入代码，建议从下面这篇开始：
+
+### [上下文工程阅读文档](docs/context-engineering.md)
+
+这篇文档详细解释 Claude Code 如何决定“给模型看什么”：
+
+- system prompt、system context、user context、messages、attachments、tools 分别是什么
+- 每一轮请求如何从 `queryLoop()` 组装上下文
+- CLAUDE.md / MEMORY.md 如何注入到模型上下文
+- prompt cache 为什么需要 `SYSTEM_PROMPT_DYNAMIC_BOUNDARY`
+- tool_use / tool_result 如何形成 agentic loop
+- 上下文过长时如何触发 microcompact、autocompact、摘要重建
+- 相关记忆如何异步预取并注入
+
+文档里带有 GitHub 行号跳转，可以边读原理边跳到对应源码。
+
+推荐阅读主线：
+
+1. [上下文工程阅读文档](docs/context-engineering.md)
+2. [`src/query.ts`](src/query.ts)：主循环，串起模型调用、工具执行和上下文回灌
+3. [`src/context.ts`](src/context.ts)：动态上下文入口
+4. [`src/utils/api.ts`](src/utils/api.ts)：system prompt 分块、上下文注入、工具 schema 转换
+5. [`src/services/compact/`](src/services/compact/)：上下文压缩和摘要重建
 
 ---
 
@@ -23,7 +51,7 @@ bun run version   # 验证版本
 
 ## 从源码中发现的 7 大隐藏功能
 
-通过阅读还原后的 1,987 个 TypeScript 源文件，我们发现了大量未公开的隐藏功能。这些功能通过**编译开关**（`feature()`）和**用户类型**（`USER_TYPE`）进行门控，外部发布版中大部分被裁剪。
+除了上下文工程，这个仓库也整理了若干隐藏功能分析。这些功能通过**编译开关**（`feature()`）和**用户类型**（`USER_TYPE`）进行门控，外部发布版中大部分被裁剪。
 
 ---
 
