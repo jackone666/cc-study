@@ -35,6 +35,14 @@ export function isContextCollapseEnabled(): boolean {
 
 export function resetContextCollapse(): void {}
 
+/**
+ * 在需要时应用 context collapse 投影。
+ *
+ * 当前恢复树里这是 no-op shim；完整实现应在这里把消息历史折叠成更省 token 的投影。
+ *
+ * @param messages 待折叠的消息历史或消息容器。
+ * @returns 折叠结果；当前实现总是返回原 messages，并标记 changed 为 false。
+ */
 export async function applyCollapsesIfNeeded<T>(messages: T): Promise<{
   messages: T
   changed: boolean

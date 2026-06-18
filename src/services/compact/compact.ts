@@ -133,6 +133,9 @@ const MAX_COMPACT_STREAMING_RETRIES = 2
  *
  * 摘要模型通常不需要原始二进制内容；保留 `[image]` / `[document]`
  * 文本标记即可让摘要知道用户曾经提供过媒体，同时显著降低压缩请求爆窗概率。
+ *
+ * @param messages 准备送入摘要模型的原始消息历史。
+ * @returns 替换掉图片/文档内容的新消息数组；没有媒体块的消息保持原对象引用。
  */
 export function stripImagesFromMessages(messages: Message[]): Message[] {
   return messages.map(message => {
@@ -298,6 +301,9 @@ export type RecompactionInfo = {
 
 /**
  * 把压缩结果还原成新的消息历史，顺序固定为边界、摘要、保留消息、附件、hook 结果。
+ *
+ * @param result compactConversation() 生成的压缩结果。
+ * @returns 压缩后应写回 queryLoop 的完整消息历史。
  */
 export function buildPostCompactMessages(result: CompactionResult): Message[] {
   return [
@@ -349,6 +355,15 @@ export function mergeHookInstructions(
 
 /**
  * 通过 forked agent 生成历史摘要，并保留必要的近期消息，形成压缩后的会话历史。
+ *
+ * @param messages 需要压缩的完整消息历史。
+ * @param context 工具上下文，提供应用状态、权限、进度回调、abortController 等。
+ * @param cacheSafeParams forked agent 可复用的缓存安全参数。
+ * @param suppressFollowUpQuestions 是否在摘要提示中禁止模型追加追问。
+ * @param customInstructions 用户或 hook 传入的自定义压缩指令。
+ * @param isAutoCompact 是否来自自动压缩；影响错误展示、日志和恢复策略。
+ * @param recompactionInfo 自动压缩链路的诊断信息，用于识别重复压缩和跨代理压缩。
+ * @returns CompactionResult，包含边界消息、摘要消息、保留尾部、附件、hook 结果和 token 统计。
  */
 export async function compactConversation(
   messages: Message[],

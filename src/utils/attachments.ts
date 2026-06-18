@@ -2357,6 +2357,10 @@ export type MemoryPrefetch = {
  * 1. 从 messages 中找到最近一条真实用户输入，跳过 isMeta 的系统注入。
  * 2. 根据当前 query、最近成功工具、已展示记忆路径发起非阻塞记忆检索。
  * 3. 返回可 dispose 的句柄，query.ts 后续在工具回合结束后零等待消费。
+ *
+ * @param messages 当前会话消息历史。
+ * @param toolUseContext 工具上下文，提供 abortController、agent 定义和 readFileState。
+ * @returns MemoryPrefetch 句柄；功能关闭、没有有效用户输入或记忆预算已满时返回 undefined。
  */
 export function startRelevantMemoryPrefetch(
   messages: ReadonlyArray<Message>,
@@ -2498,6 +2502,10 @@ export function collectRecentSuccessfulTools(
  *
  * 注意顺序：必须先过滤，再把幸存记忆写入 readFileState。
  * 如果预取阶段就写入 readFileState，这里会误判“全部已经在上下文里”，导致自我过滤。
+ *
+ * @param attachments 本轮准备注入的附件列表。
+ * @param readFileState 已经进入模型视野的文件内容缓存。
+ * @returns 去重后的附件列表；若 relevant_memories 被过滤为空，则整条附件会被移除。
  */
 export function filterDuplicateMemoryAttachments(
   attachments: Attachment[],
@@ -2921,6 +2929,15 @@ async function getLSPDiagnosticAttachments(
  *
  * 调用顺序上，它位于工具执行之后、进入下一次模型请求之前；
  * 因此文件变化、IDE 选区、任务通知、hook 输出等都能随 tool_result 一起进入下一轮上下文。
+ *
+ * @param input 当前用户输入文本；没有直接输入时可以为 null。
+ * @param toolUseContext 工具上下文，提供应用状态、权限、文件缓存、abortController 等。
+ * @param ideSelection 当前 IDE 选区。
+ * @param queuedCommands 已排队等待注入的命令。
+ * @param messages 当前会话消息历史，用于附件去重和相关记忆召回。
+ * @param querySource 当前 query 来源，用于跳过部分只属于主线程的附件。
+ * @param options.skipSkillDiscovery 是否跳过技能发现附件。
+ * @returns 异步生成器；逐条 yield AttachmentMessage，全部生成完后结束。
  */
 export async function* getAttachmentMessages(
   input: string | null,
@@ -3186,6 +3203,12 @@ export async function generateFileAttachment(
   }
 }
 
+/**
+ * 把附件数据包装成内部 AttachmentMessage。
+ *
+ * @param attachment 已聚合出的附件对象，例如 IDE 选区、文件变更、相关记忆或 hook 输出。
+ * @returns 带 uuid 和 timestamp 的 AttachmentMessage，可直接写入下一轮消息历史。
+ */
 export function createAttachmentMessage(
   attachment: Attachment,
 ): AttachmentMessage {

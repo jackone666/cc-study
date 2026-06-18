@@ -709,6 +709,14 @@ export type Options = {
  *
  * 内部仍复用流式生成器，只是消费完整个流后返回最终 assistant message。
  * 这样可以共享日志、VCR、错误处理和用量统计逻辑。
+ *
+ * @param messages 已经注入 user context、工具结果和附件的 API 消息历史。
+ * @param systemPrompt 已完成动态系统上下文追加的 system prompt 数组。
+ * @param thinkingConfig 当前请求的 thinking 配置。
+ * @param tools 本次请求可用工具列表。
+ * @param signal AbortSignal，用于用户 Esc 或上层取消时中止请求。
+ * @param options API 请求选项，包括模型、权限上下文、缓存策略和统计回调等。
+ * @returns 最终 assistant message；如果用户取消会抛 APIUserAbortError。
  */
 export async function queryModelWithoutStreaming({
   messages,
@@ -755,6 +763,14 @@ export async function queryModelWithoutStreaming({
  * 流式模型请求入口。
  *
  * queryLoop 通过该函数接收 request_start、assistant 增量、工具调用和 API 错误等事件。
+ *
+ * @param messages 已经整理好的消息历史。
+ * @param systemPrompt 已完成动态系统上下文追加的 system prompt 数组。
+ * @param thinkingConfig 当前请求的 thinking 配置。
+ * @param tools 本次请求可用工具列表。
+ * @param signal AbortSignal，用于取消流式请求。
+ * @param options API 请求选项，包括模型、权限上下文、缓存策略和统计回调等。
+ * @returns 异步生成器；依次 yield request/stream/assistant/API 错误事件，正常结束不返回额外值。
  */
 export async function* queryModelWithStreaming({
   messages,
@@ -3224,6 +3240,12 @@ export function addCacheBreakpoints(
  * 1. `splitSysPromptPrefix` 根据动态边界拆分稳定块和动态块。
  * 2. 本函数按每块的 cacheScope 决定是否附加 `cache_control`。
  * 3. 返回值直接进入 Messages API 的 `system` 字段。
+ *
+ * @param systemPrompt system prompt 字符串数组。
+ * @param enablePromptCaching 是否给可缓存 block 附加 cache_control。
+ * @param options.skipGlobalCacheForSystemPrompt 是否跳过 global cache 分块策略。
+ * @param options.querySource 当前 query 来源，用于选择缓存 TTL 等策略。
+ * @returns Anthropic Messages API 的 system text block 数组。
  */
 export function buildSystemPromptBlocks(
   systemPrompt: SystemPrompt,

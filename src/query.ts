@@ -197,6 +197,9 @@ type State = {
  *
  * 它只负责包一层生命周期管理：真正的上下文组装、模型请求、工具执行都在 queryLoop 中完成。
  * queryLoop 正常返回后，这里会把本轮已经消费的排队命令标记为 completed。
+ *
+ * @param params query 主循环需要的完整入参，包括初始消息、system/user context、工具上下文、模型配置和可选依赖覆盖。
+ * @returns 异步生成器；过程中 yield UI/API/消息事件，结束时 return 终端状态。
  */
 export async function* query(
   params: QueryParams,
@@ -223,6 +226,10 @@ export async function* query(
  * 每次循环都会按固定顺序整理上下文：取压缩边界后的历史、控制工具结果大小、
  * 执行微压缩/自动压缩、拼接 system/user context、请求模型、执行工具、注入附件，
  * 最后把新消息写回 state 并进入下一轮，直到模型不再请求工具或达到终止条件。
+ *
+ * @param params 主循环配置和当前会话状态，来自 query() 的入参。
+ * @param consumedCommandUuids 记录本轮已经消费的队列命令 uuid，query() 正常结束后统一标记 completed。
+ * @returns 异步生成器；过程中持续 yield 请求事件、模型消息、工具摘要等，最终 return 终端状态。
  */
 async function* queryLoop(
   params: QueryParams,

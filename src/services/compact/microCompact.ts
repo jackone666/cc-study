@@ -250,6 +250,11 @@ function isMainThreadSource(querySource: QuerySource | undefined): boolean {
  * 1. 先尝试基于时间的微压缩，清理旧工具结果，减少冷缓存重写成本。
  * 2. 如果缓存编辑能力可用，再尝试 cached microcompact，通过 API cache edit 删除旧工具结果。
  * 3. 如果都不适用，则原样返回消息，后续由 autocompact 处理整体上下文压力。
+ *
+ * @param messages 当前 queryLoop 准备送入模型的消息历史。
+ * @param toolUseContext 工具上下文；cached microcompact 需要从这里读取模型和运行状态。
+ * @param querySource 当前 query 来源，用来限制只有主线程触发真实微压缩。
+ * @returns MicrocompactResult；可能包含压缩后的 messages、token 变化和缓存编辑状态。
  */
 export async function microcompactMessages(
   messages: Message[],

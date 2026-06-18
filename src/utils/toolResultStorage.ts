@@ -909,17 +909,18 @@ export async function enforceToolResultBudget(
 }
 
 /**
- * Query-loop integration point for the aggregate budget.
+ * query 主循环接入工具结果总预算的入口。
  *
- * Gates on `state` (undefined means feature disabled → no-op return),
- * applies enforcement, and fires an optional transcript-write callback
- * for new replacements. The caller (query.ts) owns the persistence gate
- * — it passes a callback only for querySources that read records back on
- * resume (repl_main_thread*, agent:*); ephemeral runForkedAgent callers
- * (agentSummary, sessionMemory, /btw, compact) pass undefined.
+ * state 为 undefined 表示功能关闭，直接原样返回。
+ * 功能开启时会执行预算替换，并在产生新替换记录时调用可选的 transcript 写入回调。
+ * 是否持久化由调用方 query.ts 控制：只有 resume 时会重新读取记录的 querySource
+ * 才传入回调，例如 repl_main_thread*、agent:*；临时 runForkedAgent 调用则传 undefined。
  *
- * @returns messages with replacements applied, or the input array unchanged
- *   when the feature is off or no replacement occurred.
+ * @param messages 当前消息历史。
+ * @param state 工具结果替换状态；undefined 表示预算功能关闭。
+ * @param writeToTranscript 新替换记录的可选持久化回调。
+ * @param skipToolNames 本轮不参与预算替换的工具名集合。
+ * @returns 应继续送入后续上下文流程的消息数组；没有替换时可能直接返回原数组。
  */
 export async function applyToolResultBudget(
   messages: Message[],

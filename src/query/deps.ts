@@ -22,6 +22,8 @@ export type QueryDeps = {
  *
  * 文档里的 `deps.callModel`、`deps.microcompact`、`deps.autocompact`
  * 都通过这里落到具体实现。
+ *
+ * @returns QueryDeps 对象，包含真实模型调用、微压缩、自动压缩和 uuid 生成函数。
  */
 export function productionDeps(): QueryDeps {
   return {

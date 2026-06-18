@@ -123,6 +123,10 @@ function filterSwarmFieldsFromSchema(
  * 2. 按功能开关裁剪外部用户不应看到的字段。
  * 3. 根据模型能力和远程开关追加 strict、细粒度流式输入、缓存控制等 API 字段。
  * 4. 返回值进入 Messages API 的 `tools` 数组。
+ *
+ * @param tool 内部 Tool 对象，包含名称、输入 schema、提示词生成函数和能力标记。
+ * @param options 转换所需上下文，包括权限读取函数、完整工具列表、agent 定义、模型和缓存控制配置。
+ * @returns Anthropic Messages API 可接受的 tool schema，可能带 cache_control、strict、defer_loading 等扩展字段。
  */
 export async function toolToAPISchema(
   tool: Tool,
@@ -277,6 +281,10 @@ export function logAPIPrefix(systemPrompt: SystemPrompt): void {
  * 1. 存在 MCP 工具并跳过全局缓存时，最多返回 attribution、CLI 前缀、其余内容 3 块，使用 org 级缓存。
  * 2. 一方全局缓存且找到动态边界时，最多返回 attribution、CLI 前缀、静态内容、动态内容 4 块。
  * 3. 默认路径下，最多返回 attribution、CLI 前缀、其余内容 3 块，使用 org 级缓存。
+ *
+ * @param systemPrompt system prompt 字符串数组，通常来自 getSystemPrompt() 加 appendSystemContext()。
+ * @param options.skipGlobalCacheForSystemPrompt 为 true 时强制避开 global cache，改用工具感知的 org cache 分块。
+ * @returns SystemPromptBlock 数组，每块包含 text 和 cacheScope，供 buildSystemPromptBlocks() 写入 API system 字段。
  */
 export function splitSysPromptPrefix(
   systemPrompt: SystemPrompt,
@@ -399,6 +407,10 @@ export function splitSysPromptPrefix(
  *
  * 这里不把动态内容插入 system prompt 前缀，是为了尽量保持前缀稳定，
  * 让 `splitSysPromptPrefix` 后续能更好地命中 prompt cache。
+ *
+ * @param systemPrompt 原始 system prompt 字符串数组。
+ * @param context 系统侧动态上下文字典，例如 git 状态、缓存调试标记等。
+ * @returns 追加了动态系统上下文后的 system prompt 数组；空字符串会被过滤。
  */
 export function appendSystemContext(
   systemPrompt: SystemPrompt,
@@ -418,6 +430,10 @@ export function appendSystemContext(
  *
  * CLAUDE.md、MEMORY.md、当前日期等内容通过这个函数进入模型视野。
  * 它们不是 system prompt，所以不会破坏系统提示词的缓存边界。
+ *
+ * @param messages 准备发送给 API 的消息历史。
+ * @param context 用户侧动态上下文字典，例如 CLAUDE.md、MEMORY.md、当前日期。
+ * @returns 新消息数组；当 context 为空或测试环境下会原样返回 messages。
  */
 export function prependUserContext(
   messages: Message[],

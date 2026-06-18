@@ -27,6 +27,13 @@ Return a list of filenames for the memories that will clearly be useful to Claud
  * 扫描记忆文件头，再让小模型挑出和当前 query 最相关的记忆文件。
  *
  * 返回绝对路径和 mtime，最多 5 条；已注入过的路径会先过滤，避免重复占用记忆预算。
+ *
+ * @param query 当前用户输入，用来和记忆 manifest 做相关性匹配。
+ * @param memoryDir 记忆文件目录。
+ * @param signal AbortSignal，用于用户取消或主请求结束时中止 side query。
+ * @param recentTools 最近成功使用过的工具名，用来降低普通用法文档召回优先级。
+ * @param alreadySurfaced 当前会话已经展示过的记忆路径集合，用于去重。
+ * @returns 最多 5 条相关记忆的路径和 mtime；不直接返回内容，内容由调用方后续读取。
  */
 export async function findRelevantMemories(
   query: string,
@@ -70,6 +77,12 @@ export async function findRelevantMemories(
  *
  * 这里只返回文件名，不直接返回内容；调用方随后再用文件名回到扫描结果中取路径和 mtime，
  * 这样可以保证模型输出必须命中已扫描到的合法文件。
+ *
+ * @param query 当前用户输入。
+ * @param memories 已扫描出的记忆头信息列表。
+ * @param signal AbortSignal，用于取消小模型选择请求。
+ * @param recentTools 最近成功使用过的工具名，写入选择提示以降低噪声召回。
+ * @returns 小模型选中的记忆文件名列表；非法文件名会在调用方映射阶段被过滤。
  */
 async function selectRelevantMemories(
   query: string,

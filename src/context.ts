@@ -112,6 +112,8 @@ export const getGitStatus = memoize(async (): Promise<string | null> => {
 
 /**
  * 构建系统侧动态上下文，并在一次会话中缓存。
+ *
+ * @returns 系统侧上下文字典，例如 git 状态和缓存破坏标记；没有内容时返回空对象。
  */
 export const getSystemContext = memoize(
   async (): Promise<{
@@ -151,6 +153,8 @@ export const getSystemContext = memoize(
 
 /**
  * 构建用户侧动态上下文，并在一次会话中缓存。
+ *
+ * @returns 用户侧上下文字典，例如 CLAUDE.md/MEMORY.md 内容和当前日期；没有内容时返回空对象。
  */
 export const getUserContext = memoize(
   async (): Promise<{

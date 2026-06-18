@@ -94,6 +94,10 @@ export function getAutoCompactThreshold(model: string): number {
  * 根据当前 token 使用量计算上下文窗口状态。
  *
  * 调用方用这些布尔值决定 UI 警告、自动压缩、硬阻塞等行为。
+ *
+ * @param tokenUsage 当前消息历史的 token 使用量，可以是估算值。
+ * @param model 当前主循环模型名，用来读取模型上下文窗口和压缩阈值。
+ * @returns 窗口余量百分比，以及 warning、error、autocompact、blocking 四类阈值状态。
  */
 export function calculateTokenWarningState(
   tokenUsage: number,
@@ -164,6 +168,12 @@ export function isAutoCompactEnabled(): boolean {
 
 /**
  * 判断当前消息历史是否已经超过自动压缩阈值。
+ *
+ * @param messages 当前准备送入模型的消息历史。
+ * @param model 当前主循环模型名，用于计算自动压缩阈值。
+ * @param querySource 当前 query 来源；压缩代理、session memory 等来源会被排除，避免递归压缩。
+ * @param snipTokensFreed 已通过 snip 释放的 token 数，用来修正历史 usage 估算。
+ * @returns true 表示应触发自动压缩；false 表示继续原流程。
  */
 export async function shouldAutoCompact(
   messages: Message[],
@@ -223,6 +233,14 @@ export async function shouldAutoCompact(
 
 /**
  * 在 query 主循环中执行自动压缩：先判断阈值，再优先尝试 session memory 压缩，最后退回传统摘要压缩。
+ *
+ * @param messages 当前有效消息历史。
+ * @param toolUseContext 工具执行上下文，提供应用状态、权限、abortController、进度回调等。
+ * @param cacheSafeParams 可安全传入压缩代理的缓存相关参数。
+ * @param querySource 当前 query 来源，用于避免压缩代理递归触发。
+ * @param tracking 自动压缩连续失败等追踪状态。
+ * @param snipTokensFreed 已由 snip 释放的 token 数，用于阈值判断修正。
+ * @returns 自动压缩结果；未压缩时 wasCompacted 为 false，压缩成功时携带 CompactionResult。
  */
 export async function autoCompactIfNeeded(
   messages: Message[],

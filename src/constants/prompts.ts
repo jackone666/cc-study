@@ -445,6 +445,12 @@ function getSimpleToneAndStyleSection(): string {
  * 1. 收集工具、MCP、输出风格、环境信息等会影响行为的提示词片段。
  * 2. 通过 systemPromptSection / resolveSystemPromptSections 复用稳定片段缓存。
  * 3. 在支持全局缓存时插入 SYSTEM_PROMPT_DYNAMIC_BOUNDARY，供 API 层拆分缓存块。
+ *
+ * @param tools 当前会话可用工具列表，用来生成工具使用规则和过滤不可用提示。
+ * @param model 主循环模型名，用来生成模型相关环境说明。
+ * @param additionalWorkingDirectories 额外工作目录列表，会写入环境上下文提示。
+ * @param mcpClients 已连接的 MCP 客户端列表，用来生成 MCP 工具和资源相关提示。
+ * @returns system prompt 字符串数组；后续会由 API 层拆分为可缓存 text block。
  */
 export async function getSystemPrompt(
   tools: Tools,

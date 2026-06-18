@@ -407,14 +407,13 @@ export function buildSearchingPastContextSection(autoMemDir: string): string[] {
 }
 
 /**
- * Load the unified memory prompt for inclusion in the system prompt.
- * Dispatches based on which memory systems are enabled:
- *   - auto + team: combined prompt (both directories)
- *   - auto only: memory lines (single directory)
- * Team memory requires auto memory (enforced by isTeamMemoryEnabled), so
- * there is no team-only branch.
+ * 加载要写入 system prompt 的统一记忆规则提示词。
+ * 根据启用的记忆系统分派：
+ * - auto + team：合并两个目录的提示词。
+ * - 仅 auto：加载单目录记忆规则。
+ * team memory 依赖 auto memory，因此不存在仅 team 的分支。
  *
- * Returns null when auto memory is disabled.
+ * @returns 记忆系统提示词；auto memory 关闭时返回 null。
  */
 export async function loadMemoryPrompt(): Promise<string | null> {
   const autoEnabled = isAutoMemoryEnabled()
@@ -424,11 +423,10 @@ export async function loadMemoryPrompt(): Promise<string | null> {
     false,
   )
 
-  // KAIROS daily-log mode takes precedence over TEAMMEM: the append-only
-  // log paradigm does not compose with team sync (which expects a shared
-  // MEMORY.md that both sides read + write). Gating on `autoEnabled` here
-  // means the !autoEnabled case falls through to the tengu_memdir_disabled
-  // telemetry block below, matching the non-KAIROS path.
+  // KAIROS daily-log 模式优先于 TEAMMEM。
+  // 追加式日志范式无法和团队同步组合：团队同步期望共享 MEMORY.md，并由双方共同读写。
+  // 这里用 autoEnabled 做门控，是为了让未启用 auto memory 的情况继续落到下方
+  // tengu_memdir_disabled 遥测分支，和非 KAIROS 路径保持一致。
   if (feature('KAIROS') && autoEnabled && getKairosActive()) {
     logMemoryDirCounts(getAutoMemPath(), {
       memory_type:

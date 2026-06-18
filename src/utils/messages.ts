@@ -1986,21 +1986,30 @@ function relocateToolReferenceSiblings(
   return result
 }
 
+/**
+ * 把内部消息历史转换成 Anthropic Messages API 能接受的 user/assistant 消息数组。
+ *
+ * 转换过程中会重新排列附件、过滤仅用于 UI 的虚拟消息、修复 tool_use/tool_result 配对，
+ * 并移除已经不可用或过大的媒体块。
+ *
+ * @param messages 内部消息历史，可能包含 system boundary、attachment、tombstone 等非 API 消息。
+ * @param tools 当前请求可用工具列表，用来过滤已经不可用的 tool_use 引用。
+ * @returns API 可发送的 user/assistant 消息数组。
+ */
 export function normalizeMessagesForAPI(
   messages: Message[],
   tools: Tools = [],
 ): (UserMessage | AssistantMessage)[] {
-  // Build set of available tool names for filtering unavailable tool references
+  // 构建可用工具名集合，用于过滤已经不可用的 tool_use 引用。
   const availableToolNames = new Set(tools.map(t => t.name))
 
-  // First, reorder attachments to bubble up until they hit a tool result or assistant message
-  // Then strip virtual messages — they're display-only (e.g. REPL inner tool
-  // calls) and must never reach the API.
+  // 先把附件向前冒泡到 tool_result 或 assistant message 前，再移除虚拟消息。
+  // 虚拟消息只用于 UI 展示，例如 REPL 内部工具调用，不能进入 API。
   const reorderedMessages = reorderAttachmentsForAPI(messages).filter(
     m => !((m.type === 'user' || m.type === 'assistant') && m.isVirtual),
   )
 
-  // Build a map from error text → which block types to strip from the preceding user message.
+  // 根据错误文本建立需要从前一条 user message 中剥离的 block 类型映射。
   const errorToBlockTypes: Record<string, Set<string>> = {
     [getPdfTooLargeErrorMessage()]: new Set(['document']),
     [getPdfPasswordProtectedErrorMessage()]: new Set(['document']),
@@ -2009,8 +2018,8 @@ export function normalizeMessagesForAPI(
     [getRequestTooLargeErrorMessage()]: new Set(['document', 'image']),
   }
 
-  // Walk the reordered messages to build a targeted strip map:
-  // userMessageUUID → set of block types to strip from that message.
+  // 遍历重排后的消息，建立精确剥离映射：
+  // userMessageUUID -> 需要从该消息中剥离的 block 类型集合。
   const stripTargets = new Map<string, Set<string>>()
   for (let i = 0; i < reorderedMessages.length; i++) {
     const msg = reorderedMessages[i]!
@@ -4618,27 +4627,29 @@ export function isCompactBoundaryMessage(
 export function findLastCompactBoundaryIndex<
   T extends Message | NormalizedMessage,
 >(messages: T[]): number {
-  // Scan backwards to find the most recent compact boundary
+  // 从后往前找最近一次压缩边界。
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]
     if (message && isCompactBoundaryMessage(message)) {
       return i
     }
   }
-  return -1 // No boundary found
+  return -1 // 没有找到压缩边界。
 }
 
 /**
- * Returns messages from the last compact boundary onward (including the boundary).
- * If no boundary exists, returns all messages.
+ * 返回最近一次压缩边界之后的消息，包含边界本身。
+ * 如果没有压缩边界，则返回全部消息。
  *
- * Also filters snipped messages by default (when HISTORY_SNIP is enabled) —
- * the REPL keeps full history for UI scrollback, so model-facing paths need
- * both compact-slice AND snip-filter applied. Pass `{ includeSnipped: true }`
- * to opt out (e.g., REPL.tsx fullscreen compact handler which preserves
- * snipped messages in scrollback).
+ * HISTORY_SNIP 开启时，默认还会过滤已 snip 的消息。
+ * REPL 为了 UI 回看会保留完整历史，但面向模型的路径必须同时应用压缩切片和 snip 投影。
+ * 传 `{ includeSnipped: true }` 可以跳过 snip 过滤，例如 REPL 全屏压缩处理器需要保留滚动历史。
  *
- * Note: The boundary itself is a system message and will be filtered by normalizeMessagesForAPI.
+ * 注意：边界本身是 system message，后续 normalizeMessagesForAPI 会把它过滤掉。
+ *
+ * @param messages 原始消息数组，可以是内部 Message 或已归一化消息。
+ * @param options.includeSnipped 为 true 时保留已 snip 消息。
+ * @returns 压缩边界之后的有效消息数组；元素类型和入参保持一致。
  */
 export function getMessagesAfterCompactBoundary<
   T extends Message | NormalizedMessage,
