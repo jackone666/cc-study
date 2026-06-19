@@ -15,7 +15,7 @@
 
 如果你想先建立整体理解，再进入代码，建议从下面这篇开始：
 
-### [上下文工程阅读文档](docs/context-engineering.md)
+### [上下文工程阅读文档](https://github.com/jackone666/cc-study/blob/main/docs/context-engineering.md)
 
 这篇文档详细解释 Claude Code 如何决定“给模型看什么”：
 
@@ -31,11 +31,11 @@
 
 推荐阅读主线：
 
-1. [上下文工程阅读文档](docs/context-engineering.md)
-2. [`src/query.ts`](src/query.ts)：主循环，串起模型调用、工具执行和上下文回灌
-3. [`src/context.ts`](src/context.ts)：动态上下文入口
-4. [`src/utils/api.ts`](src/utils/api.ts)：system prompt 分块、上下文注入、工具 schema 转换
-5. [`src/services/compact/`](src/services/compact/)：上下文压缩和摘要重建
+1. [上下文工程阅读文档](https://github.com/jackone666/cc-study/blob/main/docs/context-engineering.md)
+2. [`src/query.ts`](https://github.com/jackone666/cc-study/blob/main/src/query.ts)：主循环，串起模型调用、工具执行和上下文回灌
+3. [`src/context.ts`](https://github.com/jackone666/cc-study/blob/main/src/context.ts)：动态上下文入口
+4. [`src/utils/api.ts`](https://github.com/jackone666/cc-study/blob/main/src/utils/api.ts)：system prompt 分块、上下文注入、工具 schema 转换
+5. [`src/services/compact/`](https://github.com/jackone666/cc-study/blob/main/src/services/compact/)：上下文压缩和摘要重建
 
 ---
 
@@ -55,9 +55,9 @@ bun run version   # 验证版本
 
 ---
 
-### 1. [BUDDY — AI 电子宠物](docs/01-buddy.md)
+### 1. [BUDDY — AI 电子宠物](https://github.com/jackone666/cc-study/blob/main/docs/01-buddy.md)
 
-> 源码位置：`src/buddy/` · [查看完整分析 →](docs/01-buddy.md)
+> 源码位置：[src/buddy/](https://github.com/jackone666/cc-study/blob/main/src/buddy/) · [查看完整分析 →](https://github.com/jackone666/cc-study/blob/main/docs/01-buddy.md)
 
 终端里的拓麻歌子！一个完整的虚拟宠物系统。
 
@@ -72,9 +72,9 @@ bun run version   # 验证版本
 
 ---
 
-### 2. [KAIROS — 永不关机的 Claude](docs/02-kairos.md)
+### 2. [KAIROS — 永不关机的 Claude](https://github.com/jackone666/cc-study/blob/main/docs/02-kairos.md)
 
-> 源码位置：`src/assistant/`、`src/proactive/`、`src/services/autoDream/` · [查看完整分析 →](docs/02-kairos.md)
+> 源码位置：[src/assistant/](https://github.com/jackone666/cc-study/blob/main/src/assistant/)、[src/proactive/](https://github.com/jackone666/cc-study/blob/main/src/proactive/)、[src/services/autoDream/](https://github.com/jackone666/cc-study/blob/main/src/services/autoDream/) · [查看完整分析 →](https://github.com/jackone666/cc-study/blob/main/docs/02-kairos.md)
 
 关掉终端 Claude 还在运行的持久助手模式。
 
@@ -89,9 +89,9 @@ bun run version   # 验证版本
 
 ---
 
-### 3. [ULTRAPLAN — 云端深度规划](docs/03-ultraplan.md)
+### 3. [ULTRAPLAN — 云端深度规划](https://github.com/jackone666/cc-study/blob/main/docs/03-ultraplan.md)
 
-> 源码位置：`src/commands/ultraplan.tsx`、`src/utils/ultraplan/` · [查看完整分析 →](docs/03-ultraplan.md)
+> 源码位置：[src/commands/ultraplan.tsx](https://github.com/jackone666/cc-study/blob/main/src/commands/ultraplan.tsx)、[src/utils/ultraplan/](https://github.com/jackone666/cc-study/blob/main/src/utils/ultraplan/) · [查看完整分析 →](https://github.com/jackone666/cc-study/blob/main/docs/03-ultraplan.md)
 
 把难题甩给云端 Opus 独立研究最长 30 分钟。
 
@@ -104,9 +104,9 @@ bun run version   # 验证版本
 
 ---
 
-### 4. [Coordinator — 多 Agent 编排模式](docs/04-coordinator.md)
+### 4. [Coordinator — 多 Agent 编排模式](https://github.com/jackone666/cc-study/blob/main/docs/04-coordinator.md)
 
-> 源码位置：`src/coordinator/` · [查看完整分析 →](docs/04-coordinator.md)
+> 源码位置：[src/coordinator/](https://github.com/jackone666/cc-study/blob/main/src/coordinator/) · [查看完整分析 →](https://github.com/jackone666/cc-study/blob/main/docs/04-coordinator.md)
 
 主 Claude 变成纯指挥官，Worker 并行执行任务。
 
@@ -119,9 +119,9 @@ bun run version   # 验证版本
 
 ---
 
-### 5. [26+ 隐藏命令 & 秘密开关](docs/05-hidden-commands.md)
+### 5. [26+ 隐藏命令 & 秘密开关](https://github.com/jackone666/cc-study/blob/main/docs/05-hidden-commands.md)
 
-> 源码位置：`src/commands.ts`、`src/commands/` · [查看完整分析 →](docs/05-hidden-commands.md)
+> 源码位置：[src/commands.ts](https://github.com/jackone666/cc-study/blob/main/src/commands.ts)、[src/commands/](https://github.com/jackone666/cc-study/blob/main/src/commands/) · [查看完整分析 →](https://github.com/jackone666/cc-study/blob/main/docs/05-hidden-commands.md)
 
 #### Feature-gated 命令（编译开关控制）
 
@@ -171,9 +171,9 @@ bun run version   # 验证版本
 
 ---
 
-### 6. [Bridge — 远程遥控终端](docs/06-bridge.md)
+### 6. [Bridge — 远程遥控终端](https://github.com/jackone666/cc-study/blob/main/docs/06-bridge.md)
 
-> 源码位置：`src/bridge/`（33 个文件） · [查看完整分析 →](docs/06-bridge.md)
+> 源码位置：[src/bridge/](https://github.com/jackone666/cc-study/blob/main/src/bridge/)（33 个文件） · [查看完整分析 →](https://github.com/jackone666/cc-study/blob/main/docs/06-bridge.md)
 
 从 claude.ai 或手机直接操控本地 CLI。
 
@@ -186,9 +186,9 @@ bun run version   # 验证版本
 
 ---
 
-### 7. [50 个编译开关 + 远程门控](docs/07-feature-gates.md)
+### 7. [50 个编译开关 + 远程门控](https://github.com/jackone666/cc-study/blob/main/docs/07-feature-gates.md)
 
-外部发布版是**阉割版**。Anthropic 通过三层门控控制功能。[查看完整分析 →](docs/07-feature-gates.md)
+外部发布版是**阉割版**。Anthropic 通过三层门控控制功能。[查看完整分析 →](https://github.com/jackone666/cc-study/blob/main/docs/07-feature-gates.md)
 
 #### 第一层：编译时开关（`feature()`，约 50 个）
 
