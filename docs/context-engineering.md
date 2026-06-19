@@ -114,77 +114,174 @@ user context 虽然对模型也很重要，但它不是 system prompt。比如 C
 
 这一段建议按下面的调用顺序看。它是主线，后面所有功能点都会回到这里。
 
-1. [`query(params)`](https://github.com/jackone666/cc-study/blob/main/src/query.ts#L204)：外层 async generator，负责启动主循环，并在主循环正常结束后标记已消费命令完成。
-2. [`queryLoop(params, consumedCommandUuids)`](https://github.com/jackone666/cc-study/blob/main/src/query.ts#L234)：真正的 agentic loop，内部用 `while (true)` 承载“模型请求 -> 工具执行 -> 继续请求”的循环。
-3. [`startRelevantMemoryPrefetch(...)`](https://github.com/jackone666/cc-study/blob/main/src/utils/attachments.ts#L2365)：在每个用户轮次开始时预取相关记忆，后面工具回合结束再消费，避免阻塞主请求。
-4. [`getMessagesAfterCompactBoundary(messages)`](https://github.com/jackone666/cc-study/blob/main/src/utils/messages.ts#L4654)：丢弃压缩边界之前的旧历史，只保留当前有效上下文。
-5. [`applyToolResultBudget(...)`](https://github.com/jackone666/cc-study/blob/main/src/utils/toolResultStorage.ts#L925)：先处理过大的工具结果，避免单条 `tool_result` 占满上下文窗口。
-6. [`deps.microcompact(...)`](https://github.com/jackone666/cc-study/blob/main/src/query.ts#L375) -> [`microcompactMessages(...)`](https://github.com/jackone666/cc-study/blob/main/src/services/compact/microCompact.ts#L259)：执行局部微压缩，删除或替换可以安全缩短的历史片段。
-7. [`contextCollapse.applyCollapsesIfNeeded(...)`](https://github.com/jackone666/cc-study/blob/main/src/services/contextCollapse/index.ts#L46)：如果 context collapse 功能开启，在 autocompact 前先做更细粒度的折叠投影。
-8. [`appendSystemContext(systemPrompt, systemContext)`](https://github.com/jackone666/cc-study/blob/main/src/utils/api.ts#L415)：把系统侧动态上下文追加到 system prompt 尾部。
-9. [`deps.autocompact(...)`](https://github.com/jackone666/cc-study/blob/main/src/query.ts#L402) -> [`autoCompactIfNeeded(...)`](https://github.com/jackone666/cc-study/blob/main/src/services/compact/autoCompact.ts#L245)：检查是否需要摘要压缩；如果触发，会返回新的压缩后消息数组。
-10. [`buildPostCompactMessages(compactionResult)`](https://github.com/jackone666/cc-study/blob/main/src/services/compact/compact.ts#L308)：把压缩边界、摘要、保留消息、附件和 hook 结果按固定顺序拼回消息历史。
-11. [`calculateTokenWarningState(...)`](https://github.com/jackone666/cc-study/blob/main/src/services/compact/autoCompact.ts#L102)：在真正请求模型前做阻塞阈值检查，防止明显超过窗口的请求继续发送。
-12. [`prependUserContext(messagesForQuery, userContext)`](https://github.com/jackone666/cc-study/blob/main/src/utils/api.ts#L438)：把 CLAUDE.md、MEMORY.md、日期等用户上下文包装成 meta user message，放到消息数组最前。
-13. [`deps.callModel(...)`](https://github.com/jackone666/cc-study/blob/main/src/query.ts#L607) -> [`queryModelWithStreaming(...)`](https://github.com/jackone666/cc-study/blob/main/src/services/api/claude.ts#L775)：发起主模型请求并接收流式事件。
-14. [`runTools(...)`](https://github.com/jackone666/cc-study/blob/main/src/query.ts#L1330)：如果模型返回 `tool_use`，执行对应工具并生成 `tool_result`。
-15. [`getAttachmentMessages(...)`](https://github.com/jackone666/cc-study/blob/main/src/utils/attachments.ts#L2942)：工具执行后补充 IDE、文件变更、任务、队列命令等附件上下文。
-16. [`filterDuplicateMemoryAttachments(...)`](https://github.com/jackone666/cc-study/blob/main/src/utils/attachments.ts#L2510)：消费第 3 步的记忆预取结果，并过滤已经被读写过的记忆。
-17. [`state = next`](https://github.com/jackone666/cc-study/blob/main/src/query.ts#L1645)：把本轮 assistant、tool_result、attachments 合并成下一轮 `messages`，回到第 2 步继续循环。
+1. [`query(params)`](https://github.com/jackone666/cc-study/blob/main/src/query.ts#L204)
+   这是对外暴露的 async generator 壳层。它接收调用方准备好的 `QueryParams`，创建 `consumedCommandUuids` 用来记录本轮消费过的队列命令，然后把执行权交给 `queryLoop()`。`queryLoop()` 正常结束后，它再把这些队列命令标记为 completed；如果中途异常或被外部取消，就不会误标完成。读这个函数时重点看它如何把生命周期收尾和真正循环拆开。
+
+2. [`queryLoop(params, consumedCommandUuids)`](https://github.com/jackone666/cc-study/blob/main/src/query.ts#L234)
+   这是主循环本体。它先从 `params` 中取出 system prompt、user context、system context、工具权限、模型配置等稳定入参，再创建可变的 `state`，把消息历史、工具上下文、turn 计数、压缩追踪状态都放进去。之后进入 `while (true)`：每轮都重新整理 `messagesForQuery`，再调用模型；如果模型产生 `tool_use`，就执行工具并把结果写回 `state`，然后继续下一轮；如果模型不再要工具或达到终止条件，就返回 terminal。
+
+3. [`startRelevantMemoryPrefetch(...)`](https://github.com/jackone666/cc-study/blob/main/src/utils/attachments.ts#L2365)
+   主循环一开始就启动记忆预取，但它不阻塞当前模型请求。它会从消息历史中找到最近一条真实用户输入，跳过 `<system-reminder>` 这类 meta user message；如果输入太短、记忆功能关闭、或者本会话已经注入太多记忆，就直接返回 `undefined`。成功启动时，它返回一个可 dispose 的 `MemoryPrefetch` 句柄，里面挂着异步检索 promise，后面工具执行结束后再消费。
+
+4. [`getMessagesAfterCompactBoundary(messages)`](https://github.com/jackone666/cc-study/blob/main/src/utils/messages.ts#L4654)
+   这个函数负责确定“当前有效历史从哪里开始”。它从后往前找最近的 compact boundary；如果找到了，就从边界位置开始切片，丢弃更早的旧历史；如果没有边界，就保留全部消息。开启 HISTORY_SNIP 时，它还会应用 snip 投影，把已经被历史截断功能隐藏的消息过滤掉。输出就是后面预算控制、微压缩、自动压缩共同操作的基础消息数组。
+
+5. [`applyToolResultBudget(...)`](https://github.com/jackone666/cc-study/blob/main/src/utils/toolResultStorage.ts#L925)
+   这一步先处理“单条工具结果太大”的问题。它接收当前消息、内容替换状态和可选 transcript 写入回调；如果预算功能没开，原样返回。开启时，它会扫描工具结果，把过大的内容替换成较短的引用或占位，并把新替换记录交给回调持久化。这样后续压缩和模型请求面对的是已经降载过的消息，避免一个巨大 `tool_result` 直接吃满上下文。
+
+6. [`deps.microcompact(...)`](https://github.com/jackone666/cc-study/blob/main/src/query.ts#L375) -> [`microcompactMessages(...)`](https://github.com/jackone666/cc-study/blob/main/src/services/compact/microCompact.ts#L259)
+   `deps.microcompact` 是依赖注入入口，生产环境映射到 `microcompactMessages()`。它做的是局部压缩：优先判断是否满足基于时间的清理条件，如果服务端缓存已经大概率变冷，就直接清空较旧的可压缩工具结果；如果 cached microcompact 能力可用，则通过 API cache edit 删除旧工具结果，而本地消息保持不变。它的目标不是总结整段历史，而是在进入大压缩前先清掉最容易膨胀、又相对可恢复的工具输出。
+
+7. [`contextCollapse.applyCollapsesIfNeeded(...)`](https://github.com/jackone666/cc-study/blob/main/src/services/contextCollapse/index.ts#L46)
+   这是 context collapse 的插槽。当前恢复树里它是 no-op shim，只返回原 messages 和 `changed: false`；完整实现里它应该在 autocompact 前做更细粒度的折叠投影，例如把可折叠历史换成更省 token 的表示。它放在这里的意义是：先尝试结构化折叠，再走传统摘要压缩，尽量减少信息损失。
+
+8. [`appendSystemContext(systemPrompt, systemContext)`](https://github.com/jackone666/cc-study/blob/main/src/utils/api.ts#L415)
+   这一步把系统侧动态上下文追加到 system prompt 尾部。`systemContext` 是键值字典，例如 git 状态、缓存破坏标记等；函数会把它格式化成 `key: value` 多行文本，再拼到 `systemPrompt` 数组最后。它不插到前面，是为了保持 system prompt 前缀稳定，让 prompt cache 更容易命中。
+
+9. [`deps.autocompact(...)`](https://github.com/jackone666/cc-study/blob/main/src/query.ts#L402) -> [`autoCompactIfNeeded(...)`](https://github.com/jackone666/cc-study/blob/main/src/services/compact/autoCompact.ts#L245)
+   自动压缩入口会先判断当前来源是否允许压缩，比如 compact 代理本身不能递归触发压缩，context-collapse 管理窗口时也会跳过。然后它估算 token，和当前模型的自动压缩阈值比较；如果没超阈值，返回 `wasCompacted: false`。如果超了，会先尝试 session memory compact；失败或不可用时退回传统 `compactConversation()`，最终返回 `CompactionResult`。
+
+10. [`buildPostCompactMessages(compactionResult)`](https://github.com/jackone666/cc-study/blob/main/src/services/compact/compact.ts#L308)
+    压缩成功后不能只拿摘要替换全部历史，因为还要保留边界、近期消息、附件和 hook 结果。这个函数把 `CompactionResult` 按固定顺序重建为新消息历史：compact boundary、summary messages、messagesToKeep、attachments、hookResults。这个顺序很关键，后续 `getMessagesAfterCompactBoundary()` 会依赖 boundary 找到新历史起点。
+
+11. [`calculateTokenWarningState(...)`](https://github.com/jackone666/cc-study/blob/main/src/services/compact/autoCompact.ts#L102)
+    这一步计算当前 token 状态，不直接修改消息。它根据模型上下文窗口、自动压缩阈值、warning/error buffer 算出 `percentLeft`，以及是否进入 warning、error、autocompact、blocking 四个状态。主循环用它决定是否展示警告、是否阻止继续请求，以及压缩后是否仍然太大。
+
+12. [`prependUserContext(messagesForQuery, userContext)`](https://github.com/jackone666/cc-study/blob/main/src/utils/api.ts#L438)
+    这一步把用户侧动态上下文放到 API messages 最前面。`userContext` 包含 CLAUDE.md、MEMORY.md、日期等内容；函数会把它们包装成一个 `isMeta` 的 user message，内容用 `<system-reminder>` 包起来。它不是 system prompt，所以不会破坏 system prompt 缓存边界，但模型每轮都能在消息历史开头看到这些项目规则。
+
+13. [`deps.callModel(...)`](https://github.com/jackone666/cc-study/blob/main/src/query.ts#L607) -> [`queryModelWithStreaming(...)`](https://github.com/jackone666/cc-study/blob/main/src/services/api/claude.ts#L775)
+    主循环把整理好的 `messagesForQuery`、`fullSystemPrompt`、工具列表、thinking 配置交给模型调用。生产环境里 `deps.callModel` 指向 `queryModelWithStreaming()`，它会把请求转成 Anthropic Messages API 需要的结构，并以 async generator 形式不断 yield `request_start`、流式 assistant 内容、tool_use、错误消息等事件。`queryLoop` 一边把事件给 UI，一边收集 assistant 消息和 tool_use。
+
+14. [`runTools(...)`](https://github.com/jackone666/cc-study/blob/main/src/query.ts#L1330)
+    如果 assistant 消息里有 `tool_use`，主循环会进入工具执行阶段。`runTools()` 会按权限检查、工具上下文、工具 schema 找到对应工具并执行，收集每个工具的结果，生成符合 API 协议的 `tool_result` user message。这里还会处理工具错误、权限拒绝、并发执行、工具调用摘要等情况。它的输出不是最终回答，而是下一轮模型继续推理的输入。
+
+15. [`getAttachmentMessages(...)`](https://github.com/jackone666/cc-study/blob/main/src/utils/attachments.ts#L2942)
+    工具执行后，系统会把“工具结果之外但模型下一轮应该知道的东西”补进上下文。这个 async generator 会聚合 IDE 选区、文件变更、todo 状态、队列命令、hook 输出、技能发现、相关记忆等附件，然后逐条包装成 attachment message yield 出去。它位于 tool_result 之后，是为了让模型在看到工具结果的同时，也看到最新环境变化。
+
+16. [`filterDuplicateMemoryAttachments(...)`](https://github.com/jackone666/cc-study/blob/main/src/utils/attachments.ts#L2510)
+    记忆预取结果进入上下文前还要去重。这个函数会检查 relevant_memories 附件里的每个路径，如果文件已经被 Read/Write/Edit 或上一轮记忆附件放进 `readFileState`，就过滤掉；幸存下来的记忆会写入 `readFileState`，防止下一轮重复注入。它避免模型反复看到同一段记忆，也节省上下文窗口。
+
+17. [`state = next`](https://github.com/jackone666/cc-study/blob/main/src/query.ts#L1645)
+    本轮结束时，`queryLoop` 会把旧 `state.messages`、本轮 assistant 消息、工具结果、附件消息组合成 `next`，再赋值回 `state`。这一步就是 agentic loop 的闭环：模型刚刚产生的工具调用和工具结果不会丢，而是成为下一次模型请求的历史上下文。赋值完成后回到循环顶部，重新从压缩边界、预算、上下文注入开始。
 
 ### 2. 系统提示词和动态上下文
 
 系统提示词和动态上下文分两条线：一条产出 system prompt，一条产出每轮动态 context。
 
-1. [`getSystemPrompt(...)`](https://github.com/jackone666/cc-study/blob/main/src/constants/prompts.ts#L455)：系统提示词总入口，收集静态规则、工具规则、输出风格、模型/环境说明等片段。
-2. [`systemPromptSection(...)`](https://github.com/jackone666/cc-study/blob/main/src/constants/systemPromptSections.ts#L23)：声明可缓存系统提示词片段，适合稳定内容。
-3. [`DANGEROUS_uncachedSystemPromptSection(...)`](https://github.com/jackone666/cc-study/blob/main/src/constants/systemPromptSections.ts#L38)：声明每轮重算片段，只适合确实必须动态变化的内容。
-4. [`resolveSystemPromptSections(...)`](https://github.com/jackone666/cc-study/blob/main/src/constants/systemPromptSections.ts#L52)：解析所有片段；可缓存片段命中缓存就不重新计算。
-5. [`SYSTEM_PROMPT_DYNAMIC_BOUNDARY`](https://github.com/jackone666/cc-study/blob/main/src/constants/prompts.ts#L111)：插入系统提示词数组中，标记“前面是稳定缓存区，后面是动态区”。
-6. [`getSystemContext()`](https://github.com/jackone666/cc-study/blob/main/src/context.ts#L118)：采集 git 快照、调试缓存破坏标记等系统侧动态上下文。
-7. [`getUserContext()`](https://github.com/jackone666/cc-study/blob/main/src/context.ts#L159)：采集 CLAUDE.md/MEMORY.md、当前日期等用户侧上下文。
-8. [`appendSystemContext(...)`](https://github.com/jackone666/cc-study/blob/main/src/utils/api.ts#L415)：把第 6 步追加到 system prompt 尾部。
-9. [`prependUserContext(...)`](https://github.com/jackone666/cc-study/blob/main/src/utils/api.ts#L438)：把第 7 步包装成 `<system-reminder>`，作为 meta user message 放到 messages 最前。
+1. [`getSystemPrompt(...)`](https://github.com/jackone666/cc-study/blob/main/src/constants/prompts.ts#L455)
+   这是 system prompt 的总入口。它根据当前工具列表、模型名、额外工作目录、MCP 客户端、输出风格、环境信息等生成多段提示词。它不会直接拼成一个大字符串，而是保留字符串数组形态，方便后续插入缓存边界、按块设置 cache_control。可以把它理解成“模型身份、工具规则、环境规则”的生产工厂。
+
+2. [`systemPromptSection(...)`](https://github.com/jackone666/cc-study/blob/main/src/constants/systemPromptSections.ts#L23)
+   这个函数声明一个可缓存的 system prompt 片段。调用方给它一个 `name` 和 `compute` 函数，它返回 `cacheBreak: false` 的 `SystemPromptSection`。后续解析时，如果同名片段已经算过，就可以直接复用缓存，避免稳定规则每轮都重新生成。
+
+3. [`DANGEROUS_uncachedSystemPromptSection(...)`](https://github.com/jackone666/cc-study/blob/main/src/constants/systemPromptSections.ts#L38)
+   这个函数声明一个每轮都要重新计算的提示词片段。它也接收 `name` 和 `compute`，但返回 `cacheBreak: true`，表示不能复用旧值。名字里的 `DANGEROUS` 是提醒：这类片段如果放到 prompt cache 前缀里，会让缓存变得不稳定，所以只适合确实会随会话变化的内容。
+
+4. [`resolveSystemPromptSections(...)`](https://github.com/jackone666/cc-study/blob/main/src/constants/systemPromptSections.ts#L52)
+   解析器会遍历所有 section：可缓存片段如果缓存命中，就直接返回缓存值；未命中或 `cacheBreak: true` 的片段会调用 `compute()` 重新生成。输出是和输入 section 顺序一致的字符串数组。这个顺序会继续影响 system prompt 的最终顺序，也会影响缓存边界前后内容。
+
+5. [`SYSTEM_PROMPT_DYNAMIC_BOUNDARY`](https://github.com/jackone666/cc-study/blob/main/src/constants/prompts.ts#L111)
+   这是一个特殊字符串标记，不是要给模型看的自然语言。`getSystemPrompt()` 会把它插进 system prompt 数组，用来告诉 API 层：边界前面是更稳定的可缓存内容，边界后面是动态内容。后续 `splitSysPromptPrefix()` 会识别并丢弃这个标记，只保留它表达的分界信息。
+
+6. [`getSystemContext()`](https://github.com/jackone666/cc-study/blob/main/src/context.ts#L118)
+   这个函数收集系统侧动态上下文，并在会话内 memoize。它会根据远程环境、git 指令开关决定是否读取 git 状态，也会在 break-cache 功能开启时附加缓存破坏标记。返回值是键值字典，不直接进入 messages，而是交给 `appendSystemContext()` 放到 system prompt 尾部。
+
+7. [`getUserContext()`](https://github.com/jackone666/cc-study/blob/main/src/context.ts#L159)
+   这个函数收集用户侧动态上下文，也会 memoize。它会判断是否关闭 CLAUDE.md 自动发现，读取 CLAUDE.md/MEMORY.md 等规则文件，并附加当前日期等信息。它还会把 CLAUDE.md 内容同步给自动权限分类器，避免分类器再去读文件造成循环依赖。返回值最终进入 meta user message。
+
+8. [`appendSystemContext(...)`](https://github.com/jackone666/cc-study/blob/main/src/utils/api.ts#L415)
+   这一步把第 6 步得到的系统上下文字典格式化成文本，并追加到 system prompt 数组末尾。它保留原 system prompt 主体顺序，不把动态内容塞到前缀里。这样做的结果是：模型仍能看到 git 状态等动态信息，但缓存系统更容易复用稳定前缀。
+
+9. [`prependUserContext(...)`](https://github.com/jackone666/cc-study/blob/main/src/utils/api.ts#L438)
+   这一步处理第 7 步的用户上下文。它把每个上下文键值写成 `# key\nvalue`，外层包上 `<system-reminder>`，再创建一个 `isMeta` user message 放到消息数组最前面。模型会把它当作对当前项目的背景提醒，而 API 层仍把它视为普通 user message。
 
 ### 3. API 请求成形
 
 API 请求成形是把内部结构转成 Anthropic Messages API 能接受的 payload。
 
-1. [`queryLoop()`](https://github.com/jackone666/cc-study/blob/main/src/query.ts#L234)：准备 `messagesForQuery`、`fullSystemPrompt`、`tools`、`thinkingConfig` 等入参。
-2. [`prependUserContext(...)`](https://github.com/jackone666/cc-study/blob/main/src/utils/api.ts#L438)：把用户上下文插入到 API messages 前部。
-3. [`queryModelWithStreaming(...)`](https://github.com/jackone666/cc-study/blob/main/src/services/api/claude.ts#L775)：流式请求入口，负责组装 API 参数并转发流式事件。
-4. [`normalizeMessagesForAPI(...)`](https://github.com/jackone666/cc-study/blob/main/src/utils/messages.ts#L1999)：把内部 `Message` 转成 API 需要的 user/assistant message，并处理 tool_use/tool_result 配对等细节。
-5. [`toolToAPISchema(...)`](https://github.com/jackone666/cc-study/blob/main/src/utils/api.ts#L131)：把内部 Tool 对象转成 API tool schema，包括工具描述、输入 schema、严格模式、缓存控制等。
-6. [`splitSysPromptPrefix(...)`](https://github.com/jackone666/cc-study/blob/main/src/utils/api.ts#L289)：按 `SYSTEM_PROMPT_DYNAMIC_BOUNDARY` 拆 system prompt，决定每段是否能用缓存。
-7. [`buildSystemPromptBlocks(...)`](https://github.com/jackone666/cc-study/blob/main/src/services/api/claude.ts#L3250)：把第 6 步的分块转成 API `text` block，并设置 `cache_control`。
-8. [`queryModelWithoutStreaming(...)`](https://github.com/jackone666/cc-study/blob/main/src/services/api/claude.ts#L721)：非流式请求入口，主要用于小模型 side query、分类、摘要辅助等场景。
+1. [`queryLoop()`](https://github.com/jackone666/cc-study/blob/main/src/query.ts#L234)
+   主循环在调用模型前会准备四类核心入参：`messagesForQuery` 是经过边界裁剪、预算控制、压缩处理后的历史；`fullSystemPrompt` 是追加了 system context 的系统提示词；`tools` 是当前轮可用工具；`thinkingConfig` 决定模型是否启用 thinking 以及预算。它还会准备 abort signal、fallback model、skip cache write 等运行参数。
+
+2. [`prependUserContext(...)`](https://github.com/jackone666/cc-study/blob/main/src/utils/api.ts#L438)
+   在 API 请求成形阶段，它再次体现为“把用户侧规则变成消息”。输出的第一条消息通常是 meta user message，后面才是用户/助手/工具历史。这样 Anthropic API 看到的 messages 是完整上下文，而 system prompt 仍只承载系统级规则。
+
+3. [`queryModelWithStreaming(...)`](https://github.com/jackone666/cc-study/blob/main/src/services/api/claude.ts#L775)
+   这是主模型的流式入口。它接收内部消息、system prompt、thinking 配置、工具列表和请求选项，然后进入 `queryModel()` 的底层请求流程。它会通过 VCR 包装记录/回放流式事件，并把 API 返回的增量持续 yield 给上层。上层不需要等完整回答结束，就能实时处理 assistant 文本、tool_use、错误和用量事件。
+
+4. [`normalizeMessagesForAPI(...)`](https://github.com/jackone666/cc-study/blob/main/src/utils/messages.ts#L1999)
+   内部消息类型比 Anthropic API 更丰富，包含 attachment、system boundary、tombstone、virtual message 等。这个函数会先重排附件位置，再移除只用于 UI 的虚拟消息；然后处理 tool_use/tool_result 配对，过滤不可用工具引用，移除因为文件过大或媒体错误而不能再发送的 block。输出只剩 API 能接受的 user/assistant 消息数组。
+
+5. [`toolToAPISchema(...)`](https://github.com/jackone666/cc-study/blob/main/src/utils/api.ts#L131)
+   这个函数把内部 Tool 对象变成 API 的 tool schema。它会读取工具名、工具描述、Zod 或 JSON input schema；如果 swarms 功能关闭，会隐藏不该暴露的字段；如果工具和模型都支持 strict structured output，就追加 `strict`；如果开启细粒度工具输入流式，就追加 beta 字段；最后按当前请求需要加上 `cache_control` 或 `defer_loading`。它还用缓存保持工具 schema 稳定，避免 prompt cache 因工具描述反复变化而失效。
+
+6. [`splitSysPromptPrefix(...)`](https://github.com/jackone666/cc-study/blob/main/src/utils/api.ts#L289)
+   它把 system prompt 字符串数组拆成若干 `SystemPromptBlock`。如果开启全局缓存且找到 `SYSTEM_PROMPT_DYNAMIC_BOUNDARY`，它会把边界前内容作为 `global` cache block，把边界后内容作为不缓存动态 block；如果因为 MCP 工具需要跳过全局缓存，就改成 `org` cache；默认情况下会把 attribution header、CLI 前缀、剩余提示词拆成较少块。输出里的 `cacheScope` 会直接决定 API 的 `cache_control`。
+
+7. [`buildSystemPromptBlocks(...)`](https://github.com/jackone666/cc-study/blob/main/src/services/api/claude.ts#L3250)
+   这个函数接收 `splitSysPromptPrefix()` 的分块结果，把每块转成 Anthropic API 的 `{ type: 'text', text }` block。如果启用了 prompt caching 且该块允许缓存，它会附加 `cache_control`，包括 scope 和 TTL 策略。它是 system prompt 进入 API payload 前的最后一层转换。
+
+8. [`queryModelWithoutStreaming(...)`](https://github.com/jackone666/cc-study/blob/main/src/services/api/claude.ts#L721)
+   这是非流式包装入口，但内部仍复用流式 generator。它会消费完整个 `queryModel()` 流，只保留最后的 assistant message 返回。这样 side query、小模型分类、记忆选择、摘要辅助等非交互场景也能共享同一套日志、VCR、错误处理、用量统计逻辑。用户取消时它会抛 `APIUserAbortError`，便于上层区分取消和真实 API 异常。
 
 ### 4. 附件、记忆和额外上下文
 
 附件和记忆不是主 system prompt 的一部分，它们是在每轮工具回合之后补进 messages 的额外上下文。
 
-1. [`startRelevantMemoryPrefetch(...)`](https://github.com/jackone666/cc-study/blob/main/src/utils/attachments.ts#L2365)：在主循环开始时根据用户 query 异步预取相关记忆。
-2. [`findRelevantMemories(...)`](https://github.com/jackone666/cc-study/blob/main/src/memdir/findRelevantMemories.ts#L38)：扫描记忆文件头，让小模型挑选最多 5 个相关记忆文件。
-3. [`selectRelevantMemories(...)`](https://github.com/jackone666/cc-study/blob/main/src/memdir/findRelevantMemories.ts#L87)：把 query、记忆 manifest、最近使用工具一起发给小模型，让它返回文件名列表。
-4. [`getAttachmentMessages(...)`](https://github.com/jackone666/cc-study/blob/main/src/utils/attachments.ts#L2942)：工具执行完后，把 IDE 选区、文件变更、todo、队列命令、任务状态、hook 输出等转成 attachment message。
-5. [`filterDuplicateMemoryAttachments(...)`](https://github.com/jackone666/cc-study/blob/main/src/utils/attachments.ts#L2510)：消费第 1 步预取结果前去重，避免重复注入模型已经读过或写过的记忆。
-6. [`createAttachmentMessage(...)`](https://github.com/jackone666/cc-study/blob/main/src/utils/attachments.ts#L3212)：把 attachment 数据包装成内部 `AttachmentMessage`，后续随 `toolResults` 一起进入下一轮 `state.messages`。
-7. [`loadMemoryPrompt(...)`](https://github.com/jackone666/cc-study/blob/main/src/memdir/memdir.ts#L418)：构建“如何保存/使用文件型记忆”的系统说明；它是记忆规则，不是某次 query 的相关记忆内容。
+1. [`startRelevantMemoryPrefetch(...)`](https://github.com/jackone666/cc-study/blob/main/src/utils/attachments.ts#L2365)
+   这个函数提前启动相关记忆检索。它先确认自动记忆和远程开关都开启，再找到最近一条真实用户输入；如果输入没有足够信息量，或者本会话已展示记忆超过预算，就不启动。启动后它创建子 abort controller，把 query、活跃 agent、readFileState、最近成功工具、已展示记忆路径交给 `getRelevantMemoryAttachments()`。返回句柄会记录耗时和第几轮被消费，方便遥测。
+
+2. [`findRelevantMemories(...)`](https://github.com/jackone666/cc-study/blob/main/src/memdir/findRelevantMemories.ts#L38)
+   它负责在记忆目录里找候选文件。第一步扫描记忆文件头，过滤掉已经展示过的路径；第二步调用 `selectRelevantMemories()` 让小模型从 manifest 中挑文件名；第三步把小模型返回的文件名映射回真实扫描结果，只保留合法命中的文件。它返回路径和 mtime，不直接返回内容，避免模型输出任意路径。
+
+3. [`selectRelevantMemories(...)`](https://github.com/jackone666/cc-study/blob/main/src/memdir/findRelevantMemories.ts#L87)
+   这个私有函数是“让小模型做选择”的地方。它会把当前 query、记忆 manifest、最近成功工具拼成提示词，让小模型最多返回 5 个文件名。最近成功工具会影响提示：如果某工具已经用得很顺，就降低普通用法文档的召回价值，但仍允许召回踩坑、警告类记忆。返回结果会再经过合法文件名集合过滤。
+
+4. [`getAttachmentMessages(...)`](https://github.com/jackone666/cc-study/blob/main/src/utils/attachments.ts#L2942)
+   工具执行结束后，主循环调用它生成额外附件消息。它内部先调用 `getAttachments()` 聚合所有附件来源，包括 IDE 选区、文件改动、todo 提醒、队列命令、hook 输出、后台任务状态、技能发现、记忆召回等。然后它会对附件做排序、去重和过滤，最后逐个 yield `AttachmentMessage`。这些消息会和 tool_result 一起进入下一轮上下文。
+
+5. [`filterDuplicateMemoryAttachments(...)`](https://github.com/jackone666/cc-study/blob/main/src/utils/attachments.ts#L2510)
+   相关记忆附件生成后，还要和 `readFileState` 对比。`readFileState` 表示模型已经通过文件读取或记忆注入看过哪些路径；函数会移除已经出现过的记忆，只保留新路径。幸存记忆会立即写入 `readFileState`，保证同一轮后续逻辑也知道它已经进过上下文。若某条 relevant_memories 附件被过滤空，就整条删除。
+
+6. [`createAttachmentMessage(...)`](https://github.com/jackone666/cc-study/blob/main/src/utils/attachments.ts#L3212)
+   这是附件数据进入消息系统的包装函数。它给 attachment 加上 `type: 'attachment'`、新 uuid 和 timestamp，形成内部 `AttachmentMessage`。后续 `queryLoop` 把它拼进 `state.messages`，API 发送前再由消息归一化逻辑转换成模型能看到的 user 内容。
+
+7. [`loadMemoryPrompt(...)`](https://github.com/jackone666/cc-study/blob/main/src/memdir/memdir.ts#L418)
+   这个函数生成“记忆系统应该怎么使用”的规则提示词，和第 1-6 步的“本轮相关记忆内容”不是一回事。它会根据 auto memory、team memory、KAIROS daily log 等开关选择不同提示词来源：auto + team 时合并规则，仅 auto 时加载单目录规则，auto 关闭时返回 null。它最终进入 system prompt，告诉模型如何保存和使用记忆文件。
 
 ### 5. 上下文压缩和窗口管理
 
 窗口管理有两个目标：先尽量保留细粒度上下文，真的快超窗时再用摘要替换旧历史。
 
-1. [`applyToolResultBudget(...)`](https://github.com/jackone666/cc-study/blob/main/src/utils/toolResultStorage.ts#L925)：最早执行，先缩短超大工具结果。
-2. [`microcompactMessages(...)`](https://github.com/jackone666/cc-study/blob/main/src/services/compact/microCompact.ts#L259)：做局部压缩，通常比整段摘要更少损失信息。
-3. [`contextCollapse.applyCollapsesIfNeeded(...)`](https://github.com/jackone666/cc-study/blob/main/src/services/contextCollapse/index.ts#L46)：完整实现中用于更细粒度的上下文折叠；当前恢复树是 no-op shim。
-4. [`calculateTokenWarningState(...)`](https://github.com/jackone666/cc-study/blob/main/src/services/compact/autoCompact.ts#L102)：根据 token 使用量计算 warning/error/autocompact/blocking 状态。
-5. [`shouldAutoCompact(...)`](https://github.com/jackone666/cc-study/blob/main/src/services/compact/autoCompact.ts#L178)：排除压缩代理递归、reactive-only、context-collapse 接管等场景后，判断是否触发自动压缩。
-6. [`autoCompactIfNeeded(...)`](https://github.com/jackone666/cc-study/blob/main/src/services/compact/autoCompact.ts#L245)：自动压缩入口，先尝试 session memory compact，再退回传统摘要 compact。
-7. [`compactConversation(...)`](https://github.com/jackone666/cc-study/blob/main/src/services/compact/compact.ts#L368)：传统摘要压缩，用 forked agent 总结旧历史，并收集压缩后仍需保留的附件。
-8. [`stripImagesFromMessages(...)`](https://github.com/jackone666/cc-study/blob/main/src/services/compact/compact.ts#L140)：摘要请求前剥离图片/文档块，降低压缩请求本身爆窗的概率。
-9. [`buildPostCompactMessages(...)`](https://github.com/jackone666/cc-study/blob/main/src/services/compact/compact.ts#L308)：把压缩结果重建为新的消息历史，顺序是边界、摘要、保留消息、附件、hook 结果。
-10. [`queryLoop()`](https://github.com/jackone666/cc-study/blob/main/src/query.ts#L234)：收到压缩结果后替换 `messagesForQuery`，继续当前请求或进入下一轮。
+1. [`applyToolResultBudget(...)`](https://github.com/jackone666/cc-study/blob/main/src/utils/toolResultStorage.ts#L925)
+   这是最早的降载动作，专门处理工具结果膨胀。它不会总结整段对话，只会针对过大的 tool_result 做内容替换，并可把替换记录写入 transcript，方便 resume 后保持一致。它解决的是“局部超大块”的问题。
+
+2. [`microcompactMessages(...)`](https://github.com/jackone666/cc-study/blob/main/src/services/compact/microCompact.ts#L259)
+   微压缩比自动摘要更轻。它先检查时间触发路径：如果距离上次主线程 assistant 消息太久，说明服务端缓存可能已经冷了，就清理较旧的可压缩工具结果；再检查 cached microcompact 路径：如果模型和开关支持，就通过 cache edit 让 API 删除旧工具结果。输出可能是原 messages，也可能是已经局部降载的 messages。
+
+3. [`contextCollapse.applyCollapsesIfNeeded(...)`](https://github.com/jackone666/cc-study/blob/main/src/services/contextCollapse/index.ts#L46)
+   它代表另一类窗口管理策略：不一定生成摘要，而是把某些上下文折叠成投影。当前恢复树里它不做事，但在完整实现中，它应该在 autocompact 前尝试减少 token。它返回 `{ messages, changed }`，让主循环知道是否需要更新消息历史。
+
+4. [`calculateTokenWarningState(...)`](https://github.com/jackone666/cc-study/blob/main/src/services/compact/autoCompact.ts#L102)
+   这个函数把 token 数字变成状态。它根据模型窗口和自动压缩阈值计算剩余百分比，然后判断是否超过 warning buffer、error buffer、autocompact threshold 和 blocking limit。它不关心消息内容，只关心 token 使用量和模型窗口，是 UI 警告和硬阻塞的共同依据。
+
+5. [`shouldAutoCompact(...)`](https://github.com/jackone666/cc-study/blob/main/src/services/compact/autoCompact.ts#L178)
+   它是自动压缩的前置判断。先排除不能压缩的来源，比如 `session_memory`、`compact`、context collapse 代理，避免递归或互相抢窗口；再检查用户设置和环境变量是否禁用自动压缩；最后估算 token，扣掉 snip 已释放 token，调用 `calculateTokenWarningState()` 判断是否超过自动压缩阈值。返回 true 才进入真正压缩。
+
+6. [`autoCompactIfNeeded(...)`](https://github.com/jackone666/cc-study/blob/main/src/services/compact/autoCompact.ts#L245)
+   这个函数把判断和执行合起来。它会处理连续失败熔断，避免每一轮都重复发起必然失败的压缩；确认需要压缩后，优先走 session memory compact，因为它更可能保留结构化记忆；如果不可用或失败，再调用传统 `compactConversation()`。返回值会告诉主循环是否压缩、压缩结果是什么、连续失败次数如何更新。
+
+7. [`compactConversation(...)`](https://github.com/jackone666/cc-study/blob/main/src/services/compact/compact.ts#L368)
+   传统摘要压缩的核心。它先检查消息数量、记录压缩前 token、触发 pre-compact hooks；然后剥离图片/文档、过滤压缩后会重新注入的附件，构造摘要请求。摘要优先通过 forked agent 复用主会话 prompt cache；失败时回退普通流式请求。完成后它收集摘要消息、边界消息、需要保留的近期消息、压缩后附件、hook 结果和 token 统计，形成 `CompactionResult`。
+
+8. [`stripImagesFromMessages(...)`](https://github.com/jackone666/cc-study/blob/main/src/services/compact/compact.ts#L140)
+   这是摘要请求前的安全处理。图片和文档块往往很大，但摘要模型多数时候只需要知道“这里曾经有图片/文档”，不需要原始媒体内容。函数会把 user message 里的 image/document 替换成 `[image]`、`[document]` 文本，也会处理 tool_result 内嵌媒体。这样可以降低“压缩请求本身也超窗”的概率。
+
+9. [`buildPostCompactMessages(...)`](https://github.com/jackone666/cc-study/blob/main/src/services/compact/compact.ts#L308)
+   压缩结束后，它把 `CompactionResult` 转成真正要写回主循环的消息数组。顺序固定为边界、摘要、保留消息、附件、hook 结果。边界用来告诉后续读取逻辑旧历史已经被摘要替代；摘要承载旧历史；保留消息让模型继续看见最近上下文；附件和 hook 结果补回压缩后仍需要的环境信息。
+
+10. [`queryLoop()`](https://github.com/jackone666/cc-study/blob/main/src/query.ts#L234)
+    主循环收到压缩结果后，会用新消息替换本轮 `messagesForQuery` 或更新下一轮 `state.messages`。如果压缩发生在模型调用前，它会继续用压缩后的上下文发请求；如果压缩失败或仍然超窗，则进入错误恢复或阻塞路径。也就是说，压缩不是独立流程，最终一定回到 `queryLoop` 的下一次模型请求。
 
 ## 四、主调用关系
 
